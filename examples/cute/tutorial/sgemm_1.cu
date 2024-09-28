@@ -392,9 +392,9 @@ int main(int argc, char** argv)
   if (argc >= 6)
     sscanf(argv[5], "%c", &transB);
 
-  using TA = float;
-  using TB = float;
-  using TC = float;
+  using TA = half;
+  using TB = half;
+  using TC = half;
   using TI = float;
 
   TI alpha = 1.0;

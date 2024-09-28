@@ -58,3 +58,12 @@ cutlass_example_add_executable(
   wgmma_sm90.cu
 )
 
+cutlass_example_add_executable(
+  cute_playground
+  playground.cu
+)
+
+cutlass_example_add_executable(
+  sgemm_sm80_tc
+  sgemm_sm80_tc.cu
+)
