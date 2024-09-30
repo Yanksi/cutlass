@@ -338,10 +338,10 @@ gemm_nt(int m, int n, int k,
   // Define CTA tile sizes (static)
   auto bM = Int<128>{};
   auto bN = Int<128>{};
-  auto bK = Int< 16>{};
+  auto bK = Int< 8>{};
   auto cta_tiler = make_shape(bM, bN, bK);                   // (BLK_M, BLK_N, BLK_K)
   auto bP = Int<4>{};  // Pipeline
-  auto bPr = Int<2>{}; // Register pipeline
+  [[maybe_unused]] auto bPr = Int<2>{}; // Register pipeline
 
   // Define the smem layouts (static)
   auto sA = make_layout(make_shape(bM, bK, bP));             // (m,k,p) -> smem_idx; m-major
@@ -350,18 +350,29 @@ gemm_nt(int m, int n, int k,
 
   // Define the thread layouts (static)
 
-  TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
-                                    Layout<Shape<_16,_16>>{}, // Thr layout 32x8 m-major
-                                    Layout<Shape< _8,_1>>{});// Val layout  4x1 m-major
-  TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
-                                    Layout<Shape<_16,_16>>{}, // Thr layout 32x8 n-major
-                                    Layout<Shape< _8,_1>>{});// Val layout  4x1 n-major
-// SM80_16x8x8_F16F16F16F16_TN
+  // TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
+  //                                   Layout<Shape<_16,_16>>{}, // Thr layout 32x8 m-major
+  //                                   Layout<Shape< _8,_1>>{});// Val layout  4x1 m-major
+  // TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
+  //                                   Layout<Shape<_16,_16>>{}, // Thr layout 32x8 n-major
+  //                                   Layout<Shape< _8,_1>>{});// Val layout  4x1 n-major
+  // SM80_16x8x8_F16F16F16F16_TN
   // TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F16F16F16F16_TN{},
   //                                Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
   
-  TiledMMA mmaC = make_tiled_mma(SM80_16x8x16_F16F16F16F16_TN{},
+  // TiledMMA mmaC = make_tiled_mma(SM80_16x8x16_F16F16F16F16_TN{},
+  //                                Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
+
+  TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
+                                    Layout<Shape<_32,_8>>{}, // Thr layout 32x8 m-major
+                                    Layout<Shape< _4,_1>>{});// Val layout  4x1 m-major
+  TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
+                                    Layout<Shape<_32,_8>>{}, // Thr layout 32x8 n-major
+                                    Layout<Shape< _4,_1>>{});// Val layout  4x1 n-major
+
+  TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F32TF32TF32F32_TN{},
                                  Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
+
                              
   // TiledMMA mmaC = make_tiled_mma(UniversalFMA<TC,TA,TB>{},
   //                                Layout<Shape<_16,_16,_1>>{});  // 16x16x1 TiledMMA
@@ -438,9 +449,9 @@ int main(int argc, char** argv)
   if (argc >= 6)
     sscanf(argv[5], "%c", &transB);
 
-  using TA = half;
-  using TB = half;
-  using TC = half;
+  using TA = float;
+  using TB = float;
+  using TC = float;
 
   std::cout << "M = " << m << std::endl;
   std::cout << "N = " << n << std::endl;
