@@ -338,7 +338,7 @@ gemm_nt(int m, int n, int k,
   // Define CTA tile sizes (static)
   auto bM = Int<128>{};
   auto bN = Int<128>{};
-  auto bK = Int< 8>{};
+  auto bK = Int< 16>{};
   auto cta_tiler = make_shape(bM, bN, bK);                   // (BLK_M, BLK_N, BLK_K)
   auto bP = Int<4>{};  // Pipeline
   [[maybe_unused]] auto bPr = Int<2>{}; // Register pipeline
@@ -350,32 +350,105 @@ gemm_nt(int m, int n, int k,
 
   // Define the thread layouts (static)
 
-  // TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
-  //                                   Layout<Shape<_16,_16>>{}, // Thr layout 32x8 m-major
-  //                                   Layout<Shape< _8,_1>>{});// Val layout  4x1 m-major
-  // TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
-  //                                   Layout<Shape<_16,_16>>{}, // Thr layout 32x8 n-major
-  //                                   Layout<Shape< _8,_1>>{});// Val layout  4x1 n-major
+  TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
+                                    Layout<Shape<_16,_16>>{}, // Thr layout 32x8 m-major
+                                    Layout<Shape< _8,_1>>{});// Val layout  4x1 m-major
+  TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
+                                    Layout<Shape<_16,_16>>{}, // Thr layout 32x8 n-major
+                                    Layout<Shape< _8,_1>>{});// Val layout  4x1 n-major
   // SM80_16x8x8_F16F16F16F16_TN
-  // TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F16F16F16F16_TN{},
-  //                                Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
+  TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F16F16F16F16_TN{},
+                                 Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
   
   // TiledMMA mmaC = make_tiled_mma(SM80_16x8x16_F16F16F16F16_TN{},
   //                                Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
 
-  TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
-                                    Layout<Shape<_32,_8>>{}, // Thr layout 32x8 m-major
-                                    Layout<Shape< _4,_1>>{});// Val layout  4x1 m-major
-  TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
-                                    Layout<Shape<_32,_8>>{}, // Thr layout 32x8 n-major
-                                    Layout<Shape< _4,_1>>{});// Val layout  4x1 n-major
+  // TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
+  //                                   Layout<Shape<_32,_8>>{}, // Thr layout 32x8 m-major
+  //                                   Layout<Shape< _4,_1>>{});// Val layout  4x1 m-major
+  // TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
+  //                                   Layout<Shape<_32,_8>>{}, // Thr layout 32x8 n-major
+  //                                   Layout<Shape< _4,_1>>{});// Val layout  4x1 n-major
 
-  TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F32TF32TF32F32_TN{},
-                                 Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
+  // TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F32TF32TF32F32_TN{},
+  //                                Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
 
                              
   // TiledMMA mmaC = make_tiled_mma(UniversalFMA<TC,TA,TB>{},
   //                                Layout<Shape<_16,_16,_1>>{});  // 16x16x1 TiledMMA
+
+#if 0
+  print(copyA);
+  print(copyB);
+  print(mmaC);
+#endif
+
+#if 0
+  print_latex(copyA);
+  print_latex(copyB);
+  print_latex(mmaC);
+#endif
+
+  dim3 dimBlock(size(mmaC));
+  dim3 dimGrid(size(ceil_div(M, bM)),
+               size(ceil_div(N, bN)));
+  gemm_device<<<dimGrid, dimBlock, 0, stream>>>
+      (prob_shape, cta_tiler,
+       A, dA, sA, copyA,
+       B, dB, sB, copyB,
+       C, dC, sC, mmaC);
+}
+
+// Setup params for a TN GEMM, K-Major inputs
+template <class TA, class TB, class TC>
+void
+gemm_tn(int m, int n, int k,
+        TA const* A, int ldA,
+        TB const* B, int ldB,
+        TC      * C, int ldC,
+        cudaStream_t stream = 0)
+{
+  using namespace cute;
+
+  // Define shapes (dynamic)
+  auto M = int(m);
+  auto N = int(n);
+  auto K = int(k);
+  auto prob_shape = make_shape(M, N, K);                     // (M, N, K)
+
+  // Define TN strides (mixed)
+  auto dA = make_stride(ldA, Int<1>{});                      // (dM, dK)
+  auto dB = make_stride(ldB, Int<1>{});                      // (dN, dK)
+  auto dC = make_stride(ldC, Int<1>{});                      // (dM, dN)
+
+  // Define CTA tile sizes (static)
+  auto bM = Int<128>{};
+  auto bN = Int<128>{};
+  auto bK = Int< 16>{};
+  auto cta_tiler = make_shape(bM, bN, bK);                   // (BLK_M, BLK_N, BLK_K)
+  auto bP = Int<4>{};  // Pipeline
+  [[maybe_unused]] auto bPr = Int<2>{}; // Register pipeline
+
+  // Define the smem layouts (static)
+  auto sA_atom                  = make_layout(make_shape (         bM,       bK),
+                                              make_stride(         bK, Int<1>{})); // (m,k) -> smem_idx; padded k-major
+  [[maybe_unused]] auto sB_atom = make_layout(make_shape (         bN,       bK),
+                                              make_stride(         bK, Int<1>{})); // (n,k) -> smem_idx; padded k-major
+  auto sA = tile_to_shape(sA_atom, make_shape(bM, bK, bP));
+  auto sB = tile_to_shape(sB_atom, make_shape(bN, bK, bP));
+  auto sC = make_layout(make_shape(bM, bN));                        // (m,n) -> smem_idx
+
+  // Define the thread layouts (static)
+
+  TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
+                                    make_layout(Shape<_128,_2>{}, LayoutRight{}),
+                                    Layout<Shape< _1,_8>>{});
+  TiledCopy copyB = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TB>{},
+                                    make_layout(Shape<_128,_2>{}, LayoutRight{}),
+                                    Layout<Shape< _1,_8>>{});
+  // SM80_16x8x8_F16F16F16F16_TN
+  TiledMMA mmaC = make_tiled_mma(SM80_16x8x8_F16F16F16F16_TN{},
+                                 Layout<Shape<_2,_4>>{});  // 16x8x8 TiledMMA
 
 #if 0
   print(copyA);
@@ -410,7 +483,10 @@ gemm(char transA, char transB, int m, int n, int k,
 {
   if (transA == 'N' && transB == 'T') {
     return gemm_nt(m, n, k, A, ldA, B, ldB, C, ldC, stream);
-  } else assert(false && "Not implemented");
+  } else if (transA == 'T' && transB == 'N') {
+    return gemm_tn(m, n, k, A, ldA, B, ldB, C, ldC, stream);
+  }
+  assert(false && "Not implemented");
 }
 
 
@@ -441,17 +517,17 @@ int main(int argc, char** argv)
   if (argc >= 4)
     sscanf(argv[3], "%d", &k);
 
-  char transA = 'N';
+  char transA = 'T';
   if (argc >= 5)
     sscanf(argv[4], "%c", &transA);
 
-  char transB = 'T';
+  char transB = 'N';
   if (argc >= 6)
     sscanf(argv[5], "%c", &transB);
 
-  using TA = float;
-  using TB = float;
-  using TC = float;
+  using TA = half;
+  using TB = half;
+  using TC = half;
 
   std::cout << "M = " << m << std::endl;
   std::cout << "N = " << n << std::endl;
