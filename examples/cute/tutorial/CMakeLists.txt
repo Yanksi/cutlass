@@ -63,3 +63,10 @@ cutlass_example_add_executable(
   sgemm_sm80_tc
   sgemm_sm80_tc.cu
 )
+
+cutlass_example_add_executable(
+  cute_playground
+  playground.cu
+)
+
+set_target_properties(sgemm_sm80_tc PROPERTIES COMPILE_FLAGS "-ftemplate-backtrace-limit=0")
