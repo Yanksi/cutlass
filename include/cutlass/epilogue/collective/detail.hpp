@@ -199,6 +199,14 @@ struct IsThreadEpilogueOpWithActivation <ThreadEpilogueOp, cute::enable_if_t<Thr
   using type = typename ThreadEpilogueOp::ActivationFn;
 };
 
+template <typename ThreadEpilogueOp, typename = void>
+struct IsThreadEpilogueOpWithElementwiseArguments : cute::false_type {};
+
+template <typename ThreadEpilogueOp>
+struct IsThreadEpilogueOpWithElementwiseArguments<
+        ThreadEpilogueOp,
+        cute::void_t<typename ThreadEpilogueOp::ElementwiseOp::Arguments>> : cute::true_type {};
+
 // Wrapper class to use operator-style epilogues in sm90 TMA warp-specialized kernels
 template <class EpilogueOp>
 class Sm90TmaWarpSpecializedAdapter : public EpilogueOp {
@@ -430,7 +438,8 @@ public:
 
   // Dummy methods to perform different parts of TMA/Tensormap modifications
 
-  template <bool IsLoad, class ProblemShapeMNKL>
+  template <bool IsLoad,
+            class ProblemShapeMNKL>
   CUTLASS_DEVICE
   void
   tensormaps_perform_update(
@@ -447,7 +456,6 @@ public:
   tensormaps_cp_fence_release(
       [[maybe_unused]] TensorMapStorage& shared_tensormaps,
       [[maybe_unused]] cute::TmaDescriptor const* tensormap,
-      [[maybe_unused]] uint32_t lane_predicate,
       [[maybe_unused]] int32_t warp_group_idx) { }
 
   template <bool IsLoad>
