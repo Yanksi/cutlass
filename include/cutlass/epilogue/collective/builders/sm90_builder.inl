@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -115,14 +115,15 @@ sm90_compute_tile_shape_or_override() {
   if constexpr (cute::is_same_v<EpilogueTileType, EpilogueTileAuto>) {
     auto epi_tile = [&] () {
       if constexpr (detail::sm90_is_cooperative_v<Schedule>) {
+
         auto tile_m = cute::min(_128{}, size<0>(TileShape_MNK{}));
-        auto tile_n = cute::min(_32{}, size<1>(TileShape_MNK{}));
+        auto tile_n = cute::gcd(cute::min(_32{}, size<1>(TileShape_MNK{})), size<1>(TileShape_MNK{}));
         return make_shape(tile_m, tile_n);
       }
       else if constexpr (detail::sm90_is_warp_specialized_v<Schedule>) {
-        constexpr int N_perf = sizeof_bits_v<ElementD> == 8 ? 64 : 32;
+        constexpr int N_perf = (sizeof_bits_v<ElementD> == 8) && (size<1>(TileShape_MNK{}) % 64 == 0) ? 64 : 32;
         auto tile_m = cute::min(_64{}, size<0>(TileShape_MNK{}));
-        auto tile_n = cute::min(Int<N_perf>{}, size<1>(TileShape_MNK{}));
+        auto tile_n = cute::gcd(cute::min(Int<N_perf>{}, size<1>(TileShape_MNK{})), size<1>(TileShape_MNK{}));
         return make_shape(tile_m, tile_n);
       }
       else {
@@ -167,7 +168,7 @@ sm90_compute_tile_shape_or_override() {
   }
 }
 
-// callbacks builder with TMA aux out
+// aux fusion callbacks builder for sm90 tma epilogue
 template <
   int StagesC,
   int StagesD,
@@ -177,6 +178,7 @@ template <
   class FusionOp,
   class TileShape_MNK,
   class EpilogueTile_MN,
+  class AccLoadOp,
   class ElementAccumulator
 >
 struct CallbacksBuilder<
@@ -185,20 +187,61 @@ struct CallbacksBuilder<
   TileShape_MNK,
   EpilogueTile_MN,
   ElementAccumulator,
+  AccLoadOp,
   cute::enable_if_t<(FusionOp::IsAuxOutSupported ^ FusionOp::IsAuxInSupported) // only one aux tensor
-              && not cute::is_subbyte_v<typename FusionOp::ElementAux>>
+              && not cute::is_subbyte_v<typename FusionOp::ElementAux>> // aux subbyte tensor doesn't use smem
 > {
   using GmemStrideTypeAux = gemm::TagToStrideC_t<typename FusionOp::GmemLayoutTagAux>;
   using SmemLayoutAtomAux = decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<
     GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
   using CopyOpR2S = decltype(detail::sm90_get_smem_store_op_for_accumulator<
-    GmemStrideTypeAux, typename FusionOp::ElementAux>());
+    GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
   using CopyOpS2R = decltype(detail::sm90_get_smem_load_op_for_source<
-    GmemStrideTypeAux, typename FusionOp::ElementAux>());
+    GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
   using SmemCopyOpAux = cute::conditional_t<FusionOp::IsAuxOutSupported, CopyOpR2S, CopyOpS2R>;
 
   using Callbacks = fusion::FusionCallbacks<
     Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    FusionOp, TileShape_MNK, EpilogueTile_MN,
+    SmemLayoutAtomAux, SmemCopyOpAux
+  >;
+};
+
+// ptr array aux fusion callbacks builder for sm90 tma epilogue
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  int NumEpilogueWarpGroups,
+  class FusionOp,
+  class TileShape_MNK,
+  class EpilogueTile_MN,
+  class AccLoadOp,
+  class ElementAccumulator
+>
+struct CallbacksBuilder<
+  Sm90PtrArrayTmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumEpilogueWarpGroups>,
+  FusionOp,
+  TileShape_MNK,
+  EpilogueTile_MN,
+  ElementAccumulator,
+  AccLoadOp,
+  cute::enable_if_t<(FusionOp::IsAuxOutSupported ^ FusionOp::IsAuxInSupported) // only one aux tensor
+              && not cute::is_subbyte_v<typename FusionOp::ElementAux>> // aux subbyte tensor doesn't use smem
+> {
+  using GmemStrideTypeAux = gemm::TagToStrideC_t<typename FusionOp::GmemLayoutTagAux>;
+  using SmemLayoutAtomAux = decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<
+    GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
+  using CopyOpR2S = decltype(detail::sm90_get_smem_store_op_for_accumulator<
+    GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
+  using CopyOpS2R = decltype(detail::sm90_get_smem_load_op_for_source<
+    GmemStrideTypeAux, typename FusionOp::ElementAux, EpilogueTile_MN>());
+  using SmemCopyOpAux = cute::conditional_t<FusionOp::IsAuxOutSupported, CopyOpR2S, CopyOpS2R>;
+
+  using Callbacks = fusion::FusionCallbacks<
+    Sm90PtrArrayTmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumEpilogueWarpGroups>,
     FusionOp, TileShape_MNK, EpilogueTile_MN,
     SmemLayoutAtomAux, SmemCopyOpAux
   >;
@@ -213,6 +256,7 @@ template <
   class FusionOp,
   class TileShape_MNK,
   class EpilogueTile_MN,
+  class AccLoadOp,
   class ElementAccumulator
 >
 struct CallbacksBuilder<
@@ -221,6 +265,7 @@ struct CallbacksBuilder<
   TileShape_MNK,
   EpilogueTile_MN,
   ElementAccumulator,
+  AccLoadOp,
   cute::enable_if_t<(FusionOp::IsAuxOutSupported ^ FusionOp::IsAuxInSupported) // only one aux tensor
               && sizeof_bits_v<typename FusionOp::ElementAux> == 1>
 > {
@@ -272,7 +317,17 @@ struct Sm90TmaBuilderImpl {
     >;
 
   // Get the smallest tiled copy we can use to retile the accumulators
-  using CopyAtomC = Copy_Atom<SM90_U32x4_STSM_N, cutlass::half_t>;
+  // using CopyAtomC = Copy_Atom<SM90_U32x4_STSM_N, cutlass::half_t>;
+  using CopyAtomC = cute::conditional_t<
+    size<1>(EpilogueTile_MN{}) % 16 == 0,
+    Copy_Atom<SM90_U32x4_STSM_N, cutlass::half_t>,
+    cute::conditional_t<
+      size<1>(EpilogueTile_MN{}) % 8 == 0,
+      Copy_Atom<SM90_U32x2_STSM_N, cutlass::half_t>,
+      void
+    >
+  >;
+  static_assert(!cute::is_same_v<CopyAtomC, void>, "CopyAtomC can't be void, divisiblity check for EpilogueTile_MN failed");
   // Get register to register tiled copy that happen before shared memory store.
   // Apply void as no register transform op needed currently.
   using CopyOpR2R = void;
@@ -299,10 +354,10 @@ struct Sm90TmaBuilderImpl {
       FusionCallbacks,
       CopyOpG2S,
       decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<UnderlyingGmemStrideTypeC, ElementC, EpilogueTile_MN>()),
-      decltype(detail::sm90_get_smem_load_op_for_source<UnderlyingGmemStrideTypeC, ElementC>()),
+      decltype(detail::sm90_get_smem_load_op_for_source<UnderlyingGmemStrideTypeC, ElementC, EpilogueTile_MN>()),
       CopyOpS2G,
       decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<UnderlyingGmemStrideTypeD, ElementD, EpilogueTile_MN>()),
-      decltype(detail::sm90_get_smem_store_op_for_accumulator<UnderlyingGmemStrideTypeD, ElementD>()),
+      decltype(detail::sm90_get_smem_store_op_for_accumulator<UnderlyingGmemStrideTypeD, ElementD, EpilogueTile_MN>()),
       CopyAtomC,
       CopyOpR2R
     >;
@@ -360,7 +415,7 @@ struct AuxLoadDescriptor {
       >()
     );
   using CopyOpS2R =
-    decltype(detail::sm90_get_smem_load_op_for_source<Stride, ElementAux>());
+    decltype(detail::sm90_get_smem_load_op_for_source<Stride, ElementAux, EpilogueTile>());
 };
 
 // Get Stride, SmemLayout, and CopyOpS2R for AuxStore node
@@ -381,7 +436,7 @@ struct AuxStoreDescriptor {
       >()
     );
   using CopyOpR2S =
-    decltype(detail::sm90_get_smem_store_op_for_accumulator<Stride, ElementAux>());
+    decltype(detail::sm90_get_smem_store_op_for_accumulator<Stride, ElementAux, EpilogueTile>());
 };
 
 } // namespace detail
@@ -422,7 +477,8 @@ struct CollectiveBuilder<
     Schedule,
     fusion::LinearCombination<ElementD,ElementCompute,ElementC_,ElementCompute,RoundStyle>,
     cute::enable_if_t<cute::is_same_v<Schedule, NoSmemWarpSpecialized> ||
-                      cute::is_same_v<Schedule, PtrArrayNoSmemWarpSpecialized> >> {
+                      cute::is_same_v<Schedule, PtrArrayNoSmemWarpSpecialized> ||
+                      cute::is_same_v<Schedule, PtrArrayNoSmemWarpSpecializedTransposed> >> {
 
   // Passing void C disables source load
   using ElementC = cute::conditional_t<cute::is_void_v<ElementC_>,
@@ -441,6 +497,7 @@ struct CollectiveBuilder<
     cute::is_same_v<Schedule, NoSmemWarpSpecialized>,
     cutlass::epilogue::collective::detail::Sm90TmaWarpSpecializedAdapter<
       cutlass::epilogue::collective::DefaultEpilogue<
+        ElementC_,
         cutlass::detail::TagToStrideC_t<GmemLayoutTagC>,
         cutlass::detail::TagToStrideC_t<GmemLayoutTagD>,
         ThreadOp,
@@ -448,6 +505,7 @@ struct CollectiveBuilder<
     // Epilogue for Ptr-Array and Grouped Gemm
     cutlass::epilogue::collective::detail::Sm90TmaWarpSpecializedAdapter<
       cutlass::epilogue::collective::DefaultEpilogueArray<
+        ElementC_,
         cutlass::detail::TagToStrideC_t<GmemLayoutTagC>,
         cutlass::detail::TagToStrideC_t<GmemLayoutTagD>,
         ThreadOp,
@@ -698,7 +756,7 @@ private:
   using SmemLayoutAtomAux = decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<
     GmemStrideTypeAux, typename Schedule::ElementT, EpilogueTile_MN>());
   using SmemCopyOpAux = decltype(detail::sm90_get_smem_store_op_for_accumulator<
-    GmemStrideTypeAux, typename Schedule::ElementT>());
+    GmemStrideTypeAux, typename Schedule::ElementT, EpilogueTile_MN>());
   using FusionOperationAux = fusion::LinCombPerRowBiasEltActAux<
     GmemLayoutTagD, Schedule::template ActivationFunctor, ElementD, ElementCompute,
     typename Schedule::ElementT, typename Schedule::ElementBias, ElementC_, ElementCompute
@@ -722,7 +780,17 @@ private:
   using GmemStrideTypeD = gemm::TagToStrideC_t<GmemLayoutTagD>;
 
   // Get the smallest tiled copy we can use to retile the accumulators
-  using CopyAtomC = Copy_Atom<SM90_U32x4_STSM_N, cutlass::half_t>;
+  using CopyAtomC = cute::conditional_t<
+    size<1>(EpilogueTile_MN{}) % 16 == 0,
+    Copy_Atom<SM90_U32x4_STSM_N, cutlass::half_t>,
+    cute::conditional_t<
+      size<1>(EpilogueTile_MN{}) % 8 == 0,
+      Copy_Atom<SM90_U32x2_STSM_N, cutlass::half_t>,
+      void
+    >
+  >;
+  static_assert(!cute::is_same_v<CopyAtomC, void>, "CopyAtomC can't be void, divisiblity check for EpilogueTile_MN failed");
+
   // Get register to register tiled copy that happen before shared memory store.
   // Apply void as no register transform op needed.
   using CopyOpR2R = void;
@@ -741,10 +809,10 @@ public:
       cute::conditional_t<Schedule::StoreT, FusionCallbacksAux, FusionCallbacksNoAux>,
       SM90_TMA_LOAD,
       decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<GmemStrideTypeC, ElementC, EpilogueTile_MN>()),
-      decltype(detail::sm90_get_smem_load_op_for_source<GmemStrideTypeC, ElementC>()),
+      decltype(detail::sm90_get_smem_load_op_for_source<GmemStrideTypeC, ElementC, EpilogueTile_MN>()),
       SM90_TMA_STORE,
       decltype(detail::sm90_get_epilogue_smem_swizzle_layout_atom<GmemStrideTypeD, ElementD, EpilogueTile_MN>()),
-      decltype(detail::sm90_get_smem_store_op_for_accumulator<GmemStrideTypeD, ElementD>()),
+      decltype(detail::sm90_get_smem_store_op_for_accumulator<GmemStrideTypeD, ElementD, EpilogueTile_MN>()),
       CopyAtomC,
       CopyOpR2R
     >;
@@ -766,7 +834,7 @@ template <
   class ElementD,
   class GmemLayoutTagD,
   int AlignmentD,
-  FloatRoundStyle RoundStyle
+  class FusionOperation
 >
 struct CollectiveBuilder<
     arch::Sm90,
@@ -783,8 +851,11 @@ struct CollectiveBuilder<
     GmemLayoutTagD,
     AlignmentD,
     cutlass::gemm::EpilogueTransposed,
-    fusion::LinearCombination<ElementD,ElementCompute,ElementC_,ElementCompute,RoundStyle>,
+    FusionOperation,
     void> {
+private:
+  static_assert(cute::is_same_v<FusionOperation, fusion::LinearCombination<ElementD,ElementCompute,ElementC_,ElementCompute>>,
+                "EpilogueTransposed schedule doesn't support fusion.");
   // Passing void C disables source load
   using ElementC = cute::conditional_t<cute::is_void_v<ElementC_>,
       ElementD, ElementC_>; // prevents cute breakages
@@ -796,10 +867,12 @@ struct CollectiveBuilder<
   static constexpr int FragmentSize = 1;
   using ThreadOp = thread::LinearCombination<
     ElementD, FragmentSize, ElementAccumulator, ElementCompute,
-    ScaleType, RoundStyle, ElementC>;
+    ScaleType, cutlass::FloatRoundStyle::round_to_nearest, ElementC>;
 
+public:
   using CollectiveOp = cutlass::epilogue::collective::detail::Sm90TmaWarpSpecializedAdapter<
     cutlass::epilogue::collective::DefaultEpilogue<
+      ElementC_,
       cutlass::detail::TagToStrideC_t<GmemLayoutTagC>,
       cutlass::detail::TagToStrideC_t<GmemLayoutTagD>,
       ThreadOp,

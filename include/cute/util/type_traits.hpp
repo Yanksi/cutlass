@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -141,27 +141,36 @@ using CUTE_STL_NAMESPACE::common_type_t;
 using CUTE_STL_NAMESPACE::remove_pointer;
 using CUTE_STL_NAMESPACE::remove_pointer_t;
 
+using CUTE_STL_NAMESPACE::add_pointer;
+using CUTE_STL_NAMESPACE::add_pointer_t;
+
 using CUTE_STL_NAMESPACE::alignment_of;
 using CUTE_STL_NAMESPACE::alignment_of_v;
+
+using CUTE_STL_NAMESPACE::is_pointer;
+using CUTE_STL_NAMESPACE::is_pointer_v;
 
 // <utility>
 using CUTE_STL_NAMESPACE::declval;
 
 template <class T>
-constexpr T&& forward(remove_reference_t<T>& t) noexcept
+CUTE_HOST_DEVICE constexpr
+T&& forward(remove_reference_t<T>& t) noexcept
 {
   return static_cast<T&&>(t);
 }
 
 template <class T>
-constexpr T&& forward(remove_reference_t<T>&& t) noexcept
+CUTE_HOST_DEVICE constexpr
+T&& forward(remove_reference_t<T>&& t) noexcept
 {
   static_assert(! is_lvalue_reference_v<T>, "T cannot be an lvalue reference (e.g., U&).");
   return static_cast<T&&>(t);
 }
 
 template <class T>
-constexpr remove_reference_t<T>&& move(T&& t) noexcept
+CUTE_HOST_DEVICE constexpr
+remove_reference_t<T>&& move(T&& t) noexcept
 {
   return static_cast<remove_reference_t<T>&&>(t);
 }
@@ -213,8 +222,6 @@ struct tuple_size;
 
 template <class T>
 struct tuple_size<T,void_t<typename CUTE_STL_NAMESPACE::tuple_size<T>::type>> : CUTE_STL_NAMESPACE::integral_constant<size_t, CUTE_STL_NAMESPACE::tuple_size<T>::value> {};
-
-// S =  : std::integral_constant<std::size_t, std::tuple_size<T>::value> {};
 
 template <class T>
 constexpr size_t tuple_size_v = tuple_size<T>::value;

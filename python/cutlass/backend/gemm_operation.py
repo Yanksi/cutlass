@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,12 +29,15 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 #################################################################################################
+from __future__ import annotations
 
 import copy
 import ctypes
 import enum
 
-from cuda import cuda, cudart
+from cutlass.utils.lazy_import import lazy_import
+cuda = lazy_import("cuda.cuda")
+cudart = lazy_import("cuda.cudart")
 from cutlass_library import SubstituteTemplate
 import numpy as np
 

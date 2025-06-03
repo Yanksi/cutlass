@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,8 +29,8 @@
  *
  **************************************************************************************************/
 #pragma once
-#include "cutlass/gemm/kernel/static_tile_scheduler.hpp"
 
+#include "cutlass/gemm/kernel/static_tile_scheduler.hpp"
 
 namespace cutlass::gemm::kernel::detail {
 
@@ -49,6 +49,20 @@ public:
   using Arguments = BaseScheduler::Arguments;
 
   static constexpr bool IsDynamicPersistent = false;
+
+  using Pipeline = PipelineEmpty;
+  using PipelineStorage = typename Pipeline::SharedStorage;
+  using ThrottlePipeline = PipelineEmpty;
+  using ThrottlePipelineStorage = typename ThrottlePipeline::SharedStorage;
+
+  struct CLCResponse {};
+
+  class SharedStorage {
+  public:
+    CUTLASS_DEVICE PipelineStorage pipeline() { return PipelineStorage{}; }
+    CUTLASS_DEVICE ThrottlePipelineStorage throttle_pipeline() { return ThrottlePipelineStorage{}; }
+    CUTLASS_DEVICE CLCResponse* data() { return nullptr; }
+  };
 
   // get work_idx_m, work_idx_n from blk_per_grid_dim while applying swizzle
   static CUTLASS_DEVICE

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -128,8 +128,6 @@ make_fragment_like(ComposedLayout<Swizzle<B,M,S>,Offset,Layout> const& layout)
 // Utilities
 //
 
-namespace detail {
-
 // Get just the Swizzle part of a composed layout.
 template <int B, int M, int S, class Offset, class LayoutB>
 CUTE_HOST_DEVICE constexpr
@@ -166,8 +164,6 @@ get_nonswizzle_portion(Layout<Shape,Stride> const& slayout)
 {
   return slayout;
 }
-
-} // namespace detail
 
 //
 // Slice a Swizzled ComposedLayout
@@ -447,7 +443,7 @@ recast_layout(Swizzle<B,M,S> const& swizzle)
     return upcast<scale::num>(swizzle);
   }
   else {
-    static_assert(dependent_false<scale>, "Recast not supported.");
+    return downcast<scale::den>(upcast<scale::num>(layout));
   }
   CUTE_GCC_UNREACHABLE;
 }
@@ -457,7 +453,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 max_alignment(Swizzle<B,M,S> const&)
 {
-  return Int<1 << M>{};
+  return Int<(1 << M)>{};
 }
 
 template <int B, int M, int S, class Offset, class LayoutB>
@@ -573,8 +569,8 @@ logical_product(Layout<Shape,Stride>                          const& layout,
   auto active_Y = swizzle_active_bits & typename Swizzle<B,M,S>::yyy_msk{};
 
   // Pass the identifiers through the old layout and new layout to make a new swizzle identifier, L*(L[(P o L)(c*)])
-  auto new_active_Z = new_layout(Int<0>{}, tiler.layout_b()[active_Z]);
-  auto new_active_Y = new_layout(Int<0>{}, tiler.layout_b()[active_Y]);
+  auto new_active_Z = new_layout(Int<0>{}, tiler.layout_b()(active_Z));
+  auto new_active_Y = new_layout(Int<0>{}, tiler.layout_b()(active_Y));
 
   // Use this new swizzle identifier to construxt the new swizzle for new_layout
   //   (this also makes sure it's a "valid" swizzle that Swizzle can represent)

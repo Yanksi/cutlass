@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -47,8 +47,8 @@ from cutlass.backend.library import FunctionalOp
 
 
 class PythonASTFrontend(EVTFrontendBase, ast.NodeVisitor):
-    def __init__(self, element_compute=DataType.f32, **kwargs):
-        super().__init__(element_compute, **kwargs)
+    def __init__(self, cc, element_compute=DataType.f32, **kwargs):
+        super().__init__(cc, element_compute, **kwargs)
         # Flags
         # If this state is True, visit_Constant returns values without creating imm node
         self.no_imm = False

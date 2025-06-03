@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,14 +31,9 @@
 
 #pragma once
 
-#include <cute/config.hpp>
+#include <cute/arch/config.hpp>
 
 #include <cute/arch/mma.hpp>
-
-// Config
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && defined(__CUDA_ARCH_FEAT_SM90_ALL))
-#    define CUTE_ARCH_MMA_SM90A_ENABLED
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

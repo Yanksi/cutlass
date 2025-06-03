@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2024 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +35,8 @@
 
 #pragma once
 
+#include "cutlass/platform/platform.h"
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // SM90
@@ -49,23 +51,23 @@
   #endif
 #endif
 
-#if (__CUDACC_VER_MAJOR__ >= 12 && __CUDACC_VER_MINOR__ >= 2)
+#if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 2))
   #define CUTLASS_ARCH_MMA_SPARSE_SM90_SUPPORTED
 #endif
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-// SM90 Modifiable
+// Modifiable TMA
+// tensormap.replace is arch conditional
 #if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 3))
   #define CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_SUPPORTED 1
-  #if (!defined(CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_ENABLED) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 900)
+  #if (!defined(CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_ENABLED) && \
+    (defined(__CUDA_ARCH_FEAT_SM90_ALL)  || defined(__CUDA_ARCH_FEAT_SM100_ALL) || \
+     defined(__CUDA_ARCH_FEAT_SM101_ALL) || defined(__CUDA_ARCH_FEAT_SM120_ALL)))
     #define CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_ENABLED 1
-
-    #if (!defined(CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90A_ENABLED) && defined(__CUDA_ARCH_FEAT_SM90_ALL))
-      #define CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90A_ENABLED 1
-    #endif
   #endif
 #endif
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -76,6 +78,86 @@
     #define CUTLASS_ARCH_MMA_SM90_F64_MMA_ENABLED 1
   #endif
 #endif
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+// SM100, SM100a
+#if !CUTLASS_CLANG_CUDA && (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 8))
+  #define CUTLASS_ARCH_MMA_SM100_SUPPORTED 1
+  #if (!defined(CUTLASS_ARCH_MMA_SM100_ENABLED) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1000)
+    #define CUTLASS_ARCH_MMA_SM100_ENABLED 1
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM100A_ENABLED) && defined(__CUDA_ARCH_FEAT_SM100_ALL))
+      #define CUTLASS_ARCH_MMA_SM100A_ENABLED 1
+    #endif
+
+    // SM100f
+    #if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 9))
+    #define CUTLASS_ARCH_MMA_SM100F_SUPPORTED 1
+    #endif
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM100F_ENABLED) && CUDA_ARCH_FAMILY(1000))
+      #define CUTLASS_ARCH_MMA_SM100F_ENABLED CUTLASS_ARCH_MMA_SM100F_SUPPORTED
+    #endif
+  #endif
+#endif
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+// SM101 and SM101a
+#if !CUTLASS_CLANG_CUDA && (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 8)
+  #define CUTLASS_ARCH_MMA_SM101_SUPPORTED 1
+  #if (!defined(CUTLASS_ARCH_MMA_SM101_ENABLED) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1010)
+    #define CUTLASS_ARCH_MMA_SM101_ENABLED 1
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM101A_ENABLED) && defined(__CUDA_ARCH_FEAT_SM101_ALL))
+      #define CUTLASS_ARCH_MMA_SM101A_ENABLED 1
+    #endif
+
+    // SM101f
+    #if !CUTLASS_CLANG_CUDA && (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 9)
+    #define CUTLASS_ARCH_MMA_SM101F_SUPPORTED 1
+    #endif
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM101F_ENABLED) && CUDA_ARCH_FAMILY(1010))
+      #define CUTLASS_ARCH_MMA_SM101F_ENABLED CUTLASS_ARCH_MMA_SM101F_SUPPORTED
+    #endif
+  #endif
+#endif
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+// SM120 and SM120a
+#if !CUTLASS_CLANG_CUDA && (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 8))
+  #define CUTLASS_ARCH_MMA_SM120_SUPPORTED 1
+  #if (!defined(CUTLASS_ARCH_MMA_SM120_ENABLED) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1200)
+    #define CUTLASS_ARCH_MMA_SM120_ENABLED 1
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM120A_ENABLED) && defined(__CUDA_ARCH_FEAT_SM120_ALL))
+      #define CUTLASS_ARCH_MMA_SM120A_ENABLED 1
+    #endif
+
+    // SM120f
+    #if (__CUDACC_VER_MAJOR__ > 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 9))
+    #define CUTLASS_ARCH_MMA_SM120F_SUPPORTED 1
+    #endif
+
+    #if (!defined(CUTLASS_ARCH_MMA_SM120F_ENABLED) && CUDA_ARCH_FAMILY(1200))
+      #define CUTLASS_ARCH_MMA_SM120F_ENABLED CUTLASS_ARCH_MMA_SM120F_SUPPORTED
+    #endif
+  #endif
+#endif
+
+
+#if (defined(CUTLASS_ARCH_MMA_SM100A_ENABLED) || defined(CUTLASS_ARCH_MMA_SM100F_ENABLED) ||\
+     defined(CUTLASS_ARCH_MMA_SM101A_ENABLED) || defined(CUTLASS_ARCH_MMA_SM101F_ENABLED) ||\
+     defined(CUTLASS_ARCH_MMA_SM120A_ENABLED) || defined(CUTLASS_ARCH_MMA_SM120F_ENABLED))
+#  define CUTLASS_ARCH_CLC_ENABLED
+#endif
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

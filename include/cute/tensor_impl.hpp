@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,6 +84,8 @@ struct ArrayEngine
 };
 
 // Specialization for sparse_elem<S,T> tensor allocation/iteration
+// NOTE: This can and should be used for allocation of SMEM as well!
+//       Fuse these two ArrayEngines?
 template <int S, class T, size_t N>
 struct ArrayEngine<sparse_elem<S,T>, N>
 {
@@ -233,7 +235,7 @@ struct Tensor
   decltype(auto)
   operator()(Coord const& coord) {
     if constexpr (has_underscore<Coord>::value) {
-      auto const& [sliced_layout,offset] = slice_and_offset(coord, layout());
+      auto [sliced_layout,offset] = slice_and_offset(coord, layout());
       return make_tensor(data() + offset, sliced_layout);
     } else {
       return data()[layout()(coord)];
@@ -247,7 +249,7 @@ struct Tensor
   decltype(auto)
   operator()(Coord const& coord) const {
     if constexpr (has_underscore<Coord>::value) {
-      auto const& [sliced_layout,offset] = slice_and_offset(coord, layout());
+      auto [sliced_layout,offset] = slice_and_offset(coord, layout());
       return make_tensor(data() + offset, sliced_layout);
     } else {
       return data()[layout()(coord)];
@@ -379,6 +381,8 @@ struct MakeTensor
         return Tensor<Engine,Layout>();
       }
     }
+
+    CUTE_GCC_UNREACHABLE;
   }
 };
 
@@ -470,16 +474,16 @@ make_fragment_like(Tensor<Engine,Layout> const& tensor)
 }
 
 //
-// make_counting_tensor
+// make_coord_tensor
 //   Make a tensor from a layout by binding it to a counting iter with 0-offset of the same profile as the codomain.
 //
 
 template <class Layout, __CUTE_REQUIRES(is_layout<Layout>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
-make_counting_tensor(Layout const& layout)
+make_coord_tensor(Layout const& layout)
 {
-  return make_tensor(make_inttuple_iter(repeat_like(coshape(layout), Int<0>{})), layout);
+  return make_tensor(make_inttuple_iter(coprofile(layout)), layout);
 }
 
 //
@@ -492,7 +496,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 make_identity_tensor(Shape const& shape)
 {
-  return make_counting_tensor(make_identity_layout(shape));
+  return make_coord_tensor(make_identity_layout(shape));
 }
 
 //
@@ -786,7 +790,7 @@ recast(Tensor&& tensor)
  * vectorization should be attempted.
  *
  * Note that the return value does NOT include alignment concerns such as the pointer value and
- * the divisbility of dynamic strides.
+ * the divisibility of dynamic strides.
  */
 template <class SrcEngine, class SrcLayout,
           class DstEngine, class DstLayout>
@@ -826,7 +830,7 @@ max_common_vector(Tensor<SrcEngine,SrcLayout> const& a,
  *          are both identity Layouts.
  *
  * Note that the returned layout does NOT include alignment concerns such as the pointer value and
- * the divisbility of dynamic strides.
+ * the divisibility of dynamic strides.
  */
 template <class SrcEngine, class SrcLayout,
           class DstEngine, class DstLayout>
@@ -856,6 +860,17 @@ max_common_layout(Tensor<SrcEngine,SrcLayout> const& a,
   }
 
   CUTE_GCC_UNREACHABLE;
+}
+
+/* Return the maximum (statically known) alignment of a Tensor in the number of bits
+ */
+template <class Engine, class Layout>
+CUTE_HOST_DEVICE constexpr
+auto
+max_alignment(Tensor<Engine,Layout> const& t)
+{
+  return gcd(max_alignment(t.data()),
+             max_alignment(t.layout()) * static_value<sizeof_bits<typename Engine::value_type>>());
 }
 
 //
@@ -1031,8 +1046,8 @@ local_tile(Tensor    && tensor,
 //   auto cta_tiler = Shape<_32, _64, _4>{};
 //   auto cta_coord = make_coord(blockIdx.x, blockIdx.y, _);
 //   Tensor ctaA = local_tile(dataA, cta_tiler, cta_coord, Step<_1, X,_1>{});  // (_32,_4,k)
-//   Tensor ctaB = local_tile(dataA, cta_tiler, cta_coord, Step< X,_1,_1>{});  // (_64,_4,k)
-//   Tensor ctaC = local_tile(dataA, cta_tiler, cta_coord, Step<_1,_1, X>{});  // (_32,_64)
+//   Tensor ctaB = local_tile(dataB, cta_tiler, cta_coord, Step< X,_1,_1>{});  // (_64,_4,k)
+//   Tensor ctaC = local_tile(dataC, cta_tiler, cta_coord, Step<_1,_1, X>{});  // (_32,_64)
 template <class Tensor, class Tiler, class Coord, class Proj,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE

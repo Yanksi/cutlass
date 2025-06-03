@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,8 +51,6 @@
 
 namespace cutlass::gemm::kernel {
 
-///////////////////////////////////////////////////////////////////////////////
-
 template <
   class ProblemShape_,
   class CollectiveMainloop_,
@@ -99,6 +97,7 @@ public:
 
   static_assert(ArchTag::kMinComputeCapability >= 90);
 
+  static constexpr uint32_t TileSchedulerPipelineStageCount = DispatchPolicy::Schedule::SchedulerPipelineStageCount;
   using TileSchedulerTag = TileSchedulerTag_;
 
   using TileScheduler = typename detail::TileSchedulerSelector<
@@ -106,30 +105,46 @@ public:
                                           ArchTag, 
                                           TileShape,
                                           ClusterShape
+                                          ,TileSchedulerPipelineStageCount
                                           >::Scheduler;
 
   using TileSchedulerArguments = typename TileScheduler::Arguments;
   using TileSchedulerParams = typename TileScheduler::Params;
   
   // Warp specialization thread count per threadblock
+  static constexpr uint32_t NumSchedThreads        = NumThreadsPerWarp;      // 1 warp       
   static constexpr uint32_t NumMMAThreads          = size(TiledMma{});       // 8 warps
   static constexpr uint32_t NumMainloopLoadThreads = NumThreadsPerWarp;      // 1 warp
   static constexpr uint32_t NumEpilogueLoadThreads = NumThreadsPerWarp;      // 1 warp for C
 
+  static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
   static constexpr bool IsGdcEnabled = cutlass::arch::IsGdcGloballyEnabled;
 
   static constexpr uint32_t NumLoadWarpGroups = 1;
   static constexpr uint32_t NumMmaWarpGroups = NumMMAThreads / NumThreadsPerWarpGroup;
   static constexpr uint32_t MaxThreadsPerBlock = NumMMAThreads + (NumLoadWarpGroups * NumThreadsPerWarpGroup);
   static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
+  static constexpr uint32_t NumFixupBarriers = NumMmaWarpGroups;
+  static constexpr uint32_t NumProducerThreads = CollectiveMainloop::NumProducerThreadEvents;
+  static constexpr bool     IsMainloopAuxiliaryLoadNeeded = detail::HasAuxiliaryLoad_v<typename CollectiveMainloop::DispatchPolicy>;
 
   /// Register requirement for Load and Math WGs
-  static constexpr uint32_t LoadRegisterRequirement = 40;
-  static constexpr uint32_t MmaRegisterRequirement = 232;
+  static constexpr int RegsPerThread =
+    size<0>(TileShape{}) * size<1>(TileShape{}) / NumMMAThreads *
+    sizeof(ElementAccumulator) / sizeof(uint32_t);
+  static constexpr bool HeavyRegisterPressure = RegsPerThread >= 208;
+  static constexpr uint32_t LoadRegisterRequirement = !HeavyRegisterPressure ? 40 : 24;
+  static constexpr uint32_t MmaRegisterRequirement = !HeavyRegisterPressure ? 232 : 240;
 
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
 
+  using TileSchedulerPipeline = typename TileScheduler::Pipeline;
+  using TileSchedulerPipelineState = typename TileSchedulerPipeline::PipelineState;
+  using TileSchedulerStorage = typename TileScheduler::SharedStorage;
+  using TileSchedulerThrottlePipeline = typename TileScheduler::ThrottlePipeline;
+  using TileSchedulerThrottlePipelineState = typename TileSchedulerThrottlePipeline::PipelineState;
+  
   // Kernel level shared memory storage
   struct SharedStorage {
     struct PipelineStorage : cute::aligned_struct<16, _1> {
@@ -140,6 +155,8 @@ public:
       alignas(16) EpiLoadPipelineStorage epi_load;
       alignas(16) typename LoadWarpOrderBarrier::SharedStorage load_order;
     } pipelines;
+
+    alignas(16) TileSchedulerStorage scheduler;
 
     struct TensorStorage : cute::aligned_struct<128, _1> {
       using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
@@ -198,22 +215,32 @@ public:
           "  For optimal performance, populate the arguments KernelHardwareInfo struct with the SM count.");
       sm_count = KernelHardwareInfo::query_device_multiprocessor_count(args.hw_info.device_id);
     }
-
     CUTLASS_TRACE_HOST("to_underlying_arguments(): Setting persistent grid SM count to " << sm_count);
 
-    KernelHardwareInfo hw_info{args.hw_info.device_id, sm_count};
+    // Get maximum number of clusters that could co-exist on the target device
+    int max_active_clusters = args.hw_info.max_active_clusters;
+    if (max_active_clusters <= 0) {
+      max_active_clusters = 0;
+      CUTLASS_TRACE_HOST("  WARNING: Arguments do not include a valid max cluster count.\n"
+          "  For optimal performance, populate the arguments KernelHardwareInfo struct with the max_active_clusters.");
+    }
+    else {
+      CUTLASS_TRACE_HOST("to_underlying_arguments(): Setting persistent grid cluster count to " << max_active_clusters);
+    }
+
+    KernelHardwareInfo hw_info{args.hw_info.device_id, sm_count, max_active_clusters};
 
     // Calculate workspace pointers
     uint8_t* workspace_ptr = reinterpret_cast<uint8_t*>(workspace);
     size_t workspace_offset = 0;
 
-    void* scheduler_workspace = workspace_ptr;
-    workspace_offset += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
-      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups);
-    workspace_offset = round_nearest(workspace_offset,  MinWorkspaceAlignment);
-
     void* epilogue_workspace = workspace_ptr + workspace_offset;
     workspace_offset += CollectiveEpilogue::get_workspace_size(args.problem_shape, args.epilogue);
+    workspace_offset = round_nearest(workspace_offset,  MinWorkspaceAlignment);
+
+    void* scheduler_workspace = workspace_ptr + workspace_offset;
+    workspace_offset += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
+      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups);
     workspace_offset = round_nearest(workspace_offset,  MinWorkspaceAlignment);
 
     void* mainloop_workspace = nullptr;
@@ -222,7 +249,8 @@ public:
     // subtile will not be used, therefore separate reduction will not be enabled.
     constexpr uint32_t NumEpilogueSubTiles = CollectiveEpilogue::get_store_pipe_increment(TileShape{});
     TileSchedulerParams scheduler = TileScheduler::to_underlying_arguments(
-      problem_shape_MNKL, TileShape{}, ClusterShape{}, hw_info, args.scheduler, scheduler_workspace, NumEpilogueSubTiles);
+      problem_shape_MNKL, TileShape{}, ClusterShape{}, hw_info, args.scheduler, scheduler_workspace, NumEpilogueSubTiles
+      );
 
     return {
       args.mode,
@@ -254,13 +282,12 @@ public:
     size_t workspace_size = 0;
     constexpr uint32_t NumEpilogueSubTiles = CollectiveEpilogue::get_store_pipe_increment(TileShape{});
 
-    workspace_size += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
-      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles);
-    workspace_size = round_nearest(workspace_size,  MinWorkspaceAlignment);
-
     workspace_size += CollectiveEpilogue::get_workspace_size(args.problem_shape, args.epilogue);
     workspace_size = round_nearest(workspace_size,  MinWorkspaceAlignment);
 
+    workspace_size += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
+      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles);
+    workspace_size = round_nearest(workspace_size,  MinWorkspaceAlignment);
     return workspace_size;
   }
 
@@ -273,17 +300,17 @@ public:
     constexpr uint32_t NumEpilogueSubTiles = CollectiveEpilogue::get_store_pipe_increment(TileShape{});
     static constexpr uint32_t NumAccumulatorMtxs = 1;
 
-    status = TileScheduler::template initialize_workspace<ProblemShape, ElementAccumulator>(
-      args.scheduler, workspace_ptr + workspace_offset, stream, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles, NumAccumulatorMtxs, cuda_adapter);
-    workspace_offset += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
-      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles);
+    status = CollectiveEpilogue::initialize_workspace(args.problem_shape, args.epilogue, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += CollectiveEpilogue::get_workspace_size(args.problem_shape, args.epilogue);
     workspace_offset = round_nearest(workspace_offset,  MinWorkspaceAlignment);
     if (status != Status::kSuccess) {
       return status;
     }
 
-    status = CollectiveEpilogue::initialize_workspace(args.problem_shape, args.epilogue, workspace_ptr + workspace_offset, stream, cuda_adapter);
-    workspace_offset += CollectiveEpilogue::get_workspace_size(args.problem_shape, args.epilogue);
+    status = TileScheduler::template initialize_workspace<ProblemShape, ElementAccumulator>(
+      args.scheduler, workspace_ptr + workspace_offset, stream, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles, NumAccumulatorMtxs, cuda_adapter);
+    workspace_offset += TileScheduler::template get_workspace_size<ProblemShape, ElementAccumulator>(
+      args.scheduler, args.problem_shape, args.hw_info, NumMmaWarpGroups, NumEpilogueSubTiles);
     workspace_offset = round_nearest(workspace_offset,  MinWorkspaceAlignment);
     if (status != Status::kSuccess) {
       return status;
@@ -314,10 +341,11 @@ public:
   operator()(Params const& params, char* smem_buf) {
     using namespace cute;
     using X = Underscore;
-#if defined(__CUDA_ARCH_FEAT_SM90_ALL)
+
+#if (defined(__CUDA_ARCH_FEAT_SM90_ALL) || defined(__CUDA_ARCH_FEAT_SM120_ALL) || CUDA_ARCH_CONDITIONAL_OR_FAMILY(1200))
 #  define ENABLE_SM90_KERNEL_LEVEL 1
 #endif
-// Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
+// Any Tensor Op MMA Atom in the ISA is arch conditional.
 #if ! defined(ENABLE_SM90_KERNEL_LEVEL)
     printf("ERROR : Arch conditional MMA instruction used without targeting appropriate compute capability. Aborting.\n");
 #else
@@ -342,7 +370,7 @@ public:
       Mainloop = 0,
       Warp1 = 1,
       Epilogue = 2,
-      Warp3 = 3
+      MainloopAux = 3
     };
 
 
@@ -369,6 +397,48 @@ public:
 
     CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
     bool is_epi_load_needed = collective_epilogue.is_producer_load_needed();
+    // TileScheduler pipeline
+    typename TileSchedulerPipeline::Params scheduler_pipeline_params;
+    typename TileSchedulerThrottlePipeline::Params scheduler_throttle_pipeline_params;
+    if constexpr (IsSchedDynamicPersistent) { 
+      if (warp_group_role == WarpGroupRole::Producer && producer_warp_role == ProducerWarpRole::Warp1) {
+        scheduler_pipeline_params.role = TileSchedulerPipeline::ThreadCategory::ProducerConsumer;
+      }
+      else {
+        scheduler_pipeline_params.role = TileSchedulerPipeline::ThreadCategory::Consumer;
+      }
+      scheduler_pipeline_params.producer_blockid = 0;
+      scheduler_pipeline_params.producer_arv_count = 1;
+      scheduler_pipeline_params.consumer_arv_count = NumSchedThreads + NumMainloopLoadThreads + NumMMAThreads;
+
+      if (is_epi_load_needed) {
+        scheduler_pipeline_params.consumer_arv_count += NumEpilogueLoadThreads;
+      } 
+      scheduler_pipeline_params.transaction_bytes = sizeof(typename TileScheduler::CLCResponse);
+      
+      scheduler_throttle_pipeline_params.producer_arv_count = NumMainloopLoadThreads;
+      scheduler_throttle_pipeline_params.consumer_arv_count = NumSchedThreads;
+      scheduler_throttle_pipeline_params.dst_blockid = 0;
+      scheduler_throttle_pipeline_params.initializing_warp = 3;
+      if (warp_group_role == WarpGroupRole::Producer &&
+          producer_warp_role == ProducerWarpRole::Warp1) {
+        scheduler_throttle_pipeline_params.role =
+            TileSchedulerThrottlePipeline::ThreadCategory::Consumer;
+      }
+      // set role when it is for DMA warp in Mainloop
+      else if (warp_group_role == WarpGroupRole::Producer &&
+               producer_warp_role == ProducerWarpRole::Mainloop) {
+        scheduler_throttle_pipeline_params.role =
+            TileSchedulerThrottlePipeline::ThreadCategory::Producer;
+      }
+    }
+    TileSchedulerPipeline scheduler_pipeline(shared_storage.scheduler.pipeline(), scheduler_pipeline_params);
+    TileSchedulerPipelineState scheduler_pipe_consumer_state;
+
+    TileSchedulerThrottlePipeline scheduler_throttle_pipeline(shared_storage.scheduler.throttle_pipeline(), scheduler_throttle_pipeline_params);
+    TileSchedulerThrottlePipelineState scheduler_pipe_throttle_consumer_state;
+    TileSchedulerThrottlePipelineState scheduler_pipe_throttle_producer_state = cutlass::make_producer_start_state<TileSchedulerThrottlePipeline>();
+
     // Mainloop Load pipeline
     using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
     typename MainloopPipeline::Params mainloop_pipeline_params;
@@ -380,6 +450,7 @@ public:
     }
     mainloop_pipeline_params.is_leader = warp_group_thread_idx == 0;
     mainloop_pipeline_params.num_consumers = NumMMAThreads;
+    mainloop_pipeline_params.num_producers = NumProducerThreads;
     mainloop_pipeline_params.transaction_bytes = params.mainloop.tma_transaction_bytes;
     MainloopPipeline mainloop_pipeline(shared_storage.pipelines.mainloop, mainloop_pipeline_params, ClusterShape{});
 
@@ -444,8 +515,12 @@ public:
     auto blk_shape = TileShape{};                                                                // (BLK_M,BLK_N,BLK_K)
 
     TileScheduler scheduler{params.scheduler};
-    auto work_tile_info = scheduler.initial_work_tile_info(ClusterShape{});
-    
+    if constexpr (IsSchedDynamicPersistent) {
+      scheduler.set_data_ptr(shared_storage.scheduler.data());
+    }
+    // Declare work_tile_info, then define it in each of warps that use it.
+    typename TileScheduler::WorkTileInfo work_tile_info;
+
     // In a warp specialized kernel, collectives expose data movement and compute operations separately
     CollectiveMainloop collective_mainloop;
 
@@ -463,7 +538,45 @@ public:
     cluster_wait_fn();
 
     if (warp_group_role == WarpGroupRole::Producer) {
+      work_tile_info = scheduler.initial_work_tile_info(ClusterShape{});
       cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();
+
+      // Scheduler Producer Warp
+      if (producer_warp_role == ProducerWarpRole::Warp1) {
+        if constexpr (IsSchedDynamicPersistent) { 
+          bool requires_clc_query = true;
+          TileSchedulerPipelineState scheduler_pipe_producer_state = cutlass::make_producer_start_state<TileSchedulerPipeline>();
+
+          cutlass::arch::wait_on_dependent_grids();
+          while (work_tile_info.is_valid()) {
+
+            if (requires_clc_query) {
+              // Throttle CLC query to mitigate workload imbalance caused by skews among persistent workers.
+              scheduler_throttle_pipeline.consumer_wait(scheduler_pipe_throttle_consumer_state);
+              scheduler_throttle_pipeline.consumer_release(scheduler_pipe_throttle_consumer_state);
+              ++scheduler_pipe_throttle_consumer_state;
+
+              // Query next work tile
+              scheduler_pipe_producer_state = scheduler.advance_to_next_work(scheduler_pipeline, scheduler_pipe_producer_state);
+            }
+
+            // Fetch next work tile
+            auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(
+              work_tile_info,
+              scheduler_pipeline,
+              scheduler_pipe_consumer_state
+            );
+            requires_clc_query = increment_pipe;
+            if (increment_pipe) {
+              ++scheduler_pipe_consumer_state;
+            }
+
+            work_tile_info = next_work_tile_info;
+          }
+          scheduler_pipeline.producer_tail(scheduler_pipe_producer_state);
+        } 
+      } // Scheduler Producer Warp End  
+      else
 
       // Mainloop Producer Warp
       if (producer_warp_role == ProducerWarpRole::Mainloop) {
@@ -471,6 +584,7 @@ public:
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
         bool do_load_order_arrive = true;
+        bool requires_clc_query = true;
         while (work_tile_info.is_valid()) {
           if (!TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
             auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info);
@@ -487,8 +601,13 @@ public:
           // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
           auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
           auto work_k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
-
           auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
+
+          if (requires_clc_query) {
+            scheduler_throttle_pipeline.producer_acquire(scheduler_pipe_throttle_producer_state);
+            scheduler_throttle_pipeline.producer_commit(scheduler_pipe_throttle_producer_state);
+            ++scheduler_pipe_throttle_producer_state;
+          }
 
           collective_mainloop.load(
             params.mainloop,
@@ -510,16 +629,70 @@ public:
             do_load_order_arrive = false;
           }
           // Get next work tile
-          auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info
+          auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info,
+                                                                            scheduler_pipeline,             
+                                                                            scheduler_pipe_consumer_state
                                                                            );
 
           work_tile_info = next_work_tile_info;
+          if constexpr (IsSchedDynamicPersistent) { 
+            requires_clc_query = increment_pipe; 
+            if (increment_pipe) {
+              ++scheduler_pipe_consumer_state;
+            }
+          }
         } // Scheduler work fetch loop
 
         // Make sure all Consumer Warp Groups have been waited upon
         collective_mainloop.load_tail(mainloop_pipeline, mainloop_pipe_producer_state);
 
-      } // Mainloop Producer Warp End
+      }
+      else if (producer_warp_role == ProducerWarpRole::MainloopAux) {
+        if constexpr (IsMainloopAuxiliaryLoadNeeded) {
+          while (work_tile_info.is_valid()) {
+            if (!TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
+              auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info);
+              work_tile_info = next_work_tile_info;
+              continue;
+            }
+
+            // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
+            auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
+            auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
+            auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
+            auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
+
+            // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
+            auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
+            auto work_k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
+            auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
+
+            collective_mainloop.load_auxiliary(
+              params.mainloop,
+              mainloop_pipeline,
+              mainloop_pipe_producer_state,
+              load_inputs,
+              blk_coord,
+              k_tile_iter, work_k_tile_count,
+              lane_idx,
+              block_rank_in_cluster,
+              shared_storage.tensors.mainloop
+            );
+            // Update starting pipeline state for the next tile
+            mainloop_pipe_producer_state.advance(work_k_tile_count);
+
+            // Get next work tile
+            auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(
+              work_tile_info,
+              scheduler_pipeline,
+              scheduler_pipe_consumer_state
+            );
+
+            work_tile_info = next_work_tile_info;
+          } // Scheduler work fetch loop
+
+        }
+      }
 
       // Epilogue Producer Warp
       else if (producer_warp_role == ProducerWarpRole::Epilogue && is_epi_load_needed) {
@@ -557,9 +730,16 @@ public:
           }
 
           // Get next work tile
-          auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info
+          auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info,
+                                                                            scheduler_pipeline,     
+                                                                            scheduler_pipe_consumer_state
                                                                            );
           work_tile_info = next_work_tile_info;
+          if constexpr (IsSchedDynamicPersistent) { 
+            if (increment_pipe) {
+              ++scheduler_pipe_consumer_state;
+            }
+          }
         } // Scheduler work fetch loop
 
         // Make sure all Consumer Warp Groups have been waited upon
@@ -568,6 +748,7 @@ public:
     } // Producer Warp Group End
 
     else if (warp_group_role == WarpGroupRole::Consumer0 || warp_group_role == WarpGroupRole::Consumer1) {
+      work_tile_info = scheduler.initial_work_tile_info(ClusterShape{});
       cutlass::arch::warpgroup_reg_alloc<MmaRegisterRequirement>();
 
       CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
@@ -581,11 +762,10 @@ public:
         auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
         auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
         auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
-
         // Allocate the accumulators for the (M,N) blk_shape
         //
         // MSVC CTAD breaks if we say "Tensor" here, so we use "auto" instead.
-        auto accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape));               // (MMA,MMA_M,MMA_N)
+        auto accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape));                 // (MMA,MMA_M,MMA_N)
         if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
           collective_mainloop.mma(
             mainloop_pipeline,
@@ -647,9 +827,16 @@ public:
         }
 
         // Get next work tile
-        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info
+        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info,
+                                                                          scheduler_pipeline,
+                                                                          scheduler_pipe_consumer_state
                                                                           );
         work_tile_info = next_work_tile_info;
+        if constexpr (IsSchedDynamicPersistent) { 
+          if (increment_pipe) {
+            ++scheduler_pipe_consumer_state;
+          }
+        }
       } // Scheduler work fetch loop
 
       if (do_store_tail) {

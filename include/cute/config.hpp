@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -100,7 +100,7 @@
 
 #if defined(_MSC_VER)
 // Provides support for alternative operators 'and', 'or', and 'not'
-#  include <iso646.h>
+#  include <ciso646>
 #endif // _MSC_VER
 
 #if defined(__CUDACC_RTC__)
@@ -140,6 +140,16 @@
 #  include <cstdio>
 #  include <iostream>
 #  include <iomanip>
+#endif
+
+//
+// Type
+//
+
+#if defined(__CUDACC_RTC__)
+#  include <cuda/std/cstdint>
+#else
+#  include <cstdint>
 #endif
 
 //

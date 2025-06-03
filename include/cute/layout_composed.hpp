@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@
 /* This implements a ComposedLayout of the form
  *   LayoutA o Offset o LayoutB
  * and is useful in cases where composition() does not or cannot apply to LayoutA and LayoutB.
- * For example, when the "divisibility condition" in shape_div is violated in composition(LayoutA, LayoutB).
+ * For example, when the "divisibility condition" is violated in composition(LayoutA, LayoutB).
  *
  * This ComposedLayout provides similar functionality to Layout including tiling, partitioning,
  * coordinate-to-index mapping and layout manipulations, but is not considered a "normal" layout.
@@ -616,7 +616,7 @@ recast_layout(ComposedLayout<A,O,B> const& layout)
     return upcast<scale::num>(layout);
   }
   else {
-    static_assert(dependent_false<scale>, "Recast not supported.");
+    return downcast<scale::den>(upcast<scale::num>(layout));
   }
   CUTE_GCC_UNREACHABLE;
 }
@@ -629,6 +629,15 @@ max_alignment(ComposedLayout<A,O,B> const& layout)
   // Do not attempt for general ComposedLayouts
   //return gcd(max_alignment(layout.layout_a()), max_alignment(layout.offset()), max_alignment(layout.layout_b()));
   return Int<1>{};
+}
+
+template <class A, class O, class B>
+CUTE_HOST_DEVICE constexpr
+auto
+nullspace(ComposedLayout<A,O,B> const& layout)
+{
+  // Do not attempt for general ComposedLayouts
+  return Layout<_1,_0>{};
 }
 
 //

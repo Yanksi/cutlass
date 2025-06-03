@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -36,7 +36,8 @@ Epilogue Visitor interface for compiling, and running visitor-based epilogue.
 
 import ctypes
 
-from cuda import cuda
+from cutlass.utils.lazy_import import lazy_import
+cuda = lazy_import("cuda.cuda")
 from cutlass_library import DataType
 import numpy as np
 

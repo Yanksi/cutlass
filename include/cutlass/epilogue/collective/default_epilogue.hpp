@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +35,7 @@
 #pragma once
 
 #include "cutlass/cutlass.h"
+#include "cutlass/arch/memory.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/epilogue/collective/detail.hpp"
 
@@ -53,6 +54,7 @@ namespace collective {
 /// Applies an element wise operation to all elements within the fragment
 /// and writes them out to destination storage.
 template <
+  class ElementC_,
   class StrideC_,
   class StrideD_,
   class ThreadEpilogueOp_,
@@ -72,10 +74,12 @@ public:
   using ElementAccumulator = typename ThreadEpilogueOp::ElementAccumulator;
   using ElementCompute = typename ThreadEpilogueOp::ElementCompute;
   using ElementScalar = ElementCompute;
-  using ElementC = typename ThreadEpilogueOp::ElementC;
+  using ElementC = ElementC_;
   using StrideC = StrideC_;
   using ElementD = typename ThreadEpilogueOp::ElementD;
   using StrideD = StrideD_;
+
+  using GmemElementC = cute::conditional_t<cute::is_void_v<ElementC>, ElementD, ElementC>; // prevents void ref breakages
 
   using GmemTiledCopyC = void;
   using GmemTiledCopyD = void;
@@ -155,16 +159,16 @@ public:
     class TiledMma,
     class ResidueMNK
   >
-  CUTLASS_HOST_DEVICE void
+  CUTLASS_DEVICE void
   operator()(
       ProblemShapeMNKL problem_shape_mnkl,
       BlockShapeMNK blk_shape_MNK,
       BlockCoordMNKL blk_coord_mnkl,
       cute::Tensor<FrgEngine, FrgLayout> const& accumulators,
       TiledMma tiled_mma,
-      ResidueMNK residue_mnk,
+      [[maybe_unused]] ResidueMNK,
       int thread_idx,
-      [[maybe_unused]] char* smem_buf)
+      [[maybe_unused]] char*)
   {
     using namespace cute;
     using X = Underscore;
@@ -183,20 +187,20 @@ public:
     auto stride_d = detail::get_epilogue_stride<EpilogueSchedule>(params.dD);
 
     // Represent the full output tensor
-    Tensor mC_mnl = make_tensor(make_gmem_ptr(params.ptr_C), make_shape(M,N,L), stride_c);                 // (m,n,l)
-    Tensor mD_mnl = make_tensor(make_gmem_ptr(params.ptr_D), make_shape(M,N,L), stride_d);                 // (m,n,l)
-    Tensor gC_mnl = local_tile(mC_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});    // (BLK_M,BLK_N,m,n,l)
-    Tensor gD_mnl = local_tile(mD_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});    // (BLK_M,BLK_N,m,n,l)
+    Tensor mC_mnl = make_tensor(make_gmem_ptr<GmemElementC>(params.ptr_C), make_shape(M,N,L), stride_c);     // (m,n,l)
+    Tensor mD_mnl = make_tensor(make_gmem_ptr(params.ptr_D), make_shape(M,N,L), stride_d);                   // (m,n,l)
+    Tensor gC_mnl = local_tile(mC_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});      // (BLK_M,BLK_N,m,n,l)
+    Tensor gD_mnl = local_tile(mD_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});      // (BLK_M,BLK_N,m,n,l)
 
     // Slice to get the tile this CTA is responsible for
     auto [m_coord, n_coord, k_coord, l_coord] = blk_coord_mnkl;
-    Tensor gC = gC_mnl(_,_,m_coord,n_coord,l_coord);                                                 // (BLK_M,BLK_N)
-    Tensor gD = gD_mnl(_,_,m_coord,n_coord,l_coord);                                                 // (BLK_M,BLK_N)
+    Tensor gC = gC_mnl(_,_,m_coord,n_coord,l_coord);                                                   // (BLK_M,BLK_N)
+    Tensor gD = gD_mnl(_,_,m_coord,n_coord,l_coord);                                                   // (BLK_M,BLK_N)
 
     // Partition source and destination tiles to match the accumulator partitioning
     auto thr_mma = tiled_mma.get_thread_slice(thread_idx);
-    Tensor tCgD = thr_mma.partition_C(gD);                                       // (VEC,THR_M,THR_N)
-    Tensor tCgC = thr_mma.partition_C(gC);                                       // (VEC,THR_M,THR_N)
+    Tensor tCgD = thr_mma.partition_C(gD);                                                         // (VEC,THR_M,THR_N)
+    Tensor tCgC = thr_mma.partition_C(gC);                                                         // (VEC,THR_M,THR_N)
 
     static_assert(is_static<FrgLayout>::value, "Accumulator layout must be static");
     CUTE_STATIC_ASSERT_V(size(tCgC) == size(tCgD),
@@ -204,26 +208,45 @@ public:
     CUTE_STATIC_ASSERT_V(size(tCgD) == size(accumulators),
         "Accumulator count must have the same destination element count.");
 
-    // Make an identity coordinate tensor for predicating our output MN tile
-    auto cD = make_identity_tensor(make_shape(unwrap(shape<0>(gD)), unwrap(shape<1>(gD))));
-    Tensor tCcD = thr_mma.partition_C(cD);
+    // OOB predication for tile quantization "residue"
+    // Absolute coordinate tensors (dynamic)
+    auto shape_MN = make_shape(M,N);
+    Tensor mD_crd = make_identity_tensor(shape_MN);                                                            // (M,N)
+    Tensor cD_mn = local_tile(mD_crd, take<0,2>(blk_shape_MNK), make_coord(m_coord, n_coord));         // (BLK_M,BLK_N)
+    Tensor tCcD_mn = thr_mma.partition_C(cD_mn);                                                   // (VEC,THR_M,THR_N)
+    // Relative coordinate tensors (static)
+    Tensor cD = make_coord_tensor(cD_mn.layout());                                                  // (BLK_M,BLK_N)
+    Tensor tCcD = make_coord_tensor(tCcD_mn.layout());                                          // (VEC,THR_M,THR_N)
+    // Subtract the global "bottom right" corner from the local "top left" corner to get the max relative coordinate
+    auto residue_cD = shape_MN - cD_mn(_0{});                                                                  // (m,n)
+    auto residue_tCcD = shape_MN - tCcD_mn(_0{});                                                              // (m,n)
+
+    // Fully OOB tile
+    if (not elem_less(repeat_like(residue_cD, _0{}), residue_cD)) {
+      return;
+    }
+
+    using FragCType = remove_cvref_t<decltype(tCgC(0))>;
+    using FragDType = remove_cvref_t<decltype(tCgD(0))>;
 
     // source is needed
     if (epilogue_op.is_source_needed()) {
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < size(accumulators); ++i) {
-        if (elem_less(tCcD(i), make_coord(get<0>(residue_mnk), get<1>(residue_mnk)))) {
-          tCgD(i) = epilogue_op(accumulators(i), tCgC(i));
-        }
+        FragCType fragC;
+        bool pred = elem_less(tCcD(i), residue_tCcD);
+        arch::global_load<FragCType, sizeof(FragCType)>(fragC, &tCgC(i), pred);
+        FragDType fragD = epilogue_op(accumulators(i), fragC);
+        arch::global_store<FragDType, sizeof(FragDType)>(fragD, &tCgD(i), pred);
       }
     }
     // source is not needed, avoid load
     else {
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < size(accumulators); ++i) {
-        if (elem_less(tCcD(i), make_coord(get<0>(residue_mnk), get<1>(residue_mnk)))) {
-          tCgD(i) = epilogue_op(accumulators(i));
-        }
+        bool pred = elem_less(tCcD(i), residue_tCcD);
+        FragDType fragD = epilogue_op(accumulators(i));
+        arch::global_store<FragDType, sizeof(FragDType)>(fragD, &tCgD(i), pred);
       }
     }
   }

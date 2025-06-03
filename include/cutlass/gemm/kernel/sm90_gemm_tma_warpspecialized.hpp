@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -270,7 +270,7 @@ public:
     using namespace cute;
     using X = Underscore;
 
-#if defined(__CUDA_ARCH_FEAT_SM90_ALL)
+#if (defined(__CUDA_ARCH_FEAT_SM90_ALL) || defined(__CUDA_ARCH_FEAT_SM120_ALL) || CUDA_ARCH_CONDITIONAL_OR_FAMILY(1200))
 #  define ENABLE_SM90_KERNEL_LEVEL 1
 #endif
 // Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
@@ -401,9 +401,7 @@ public:
 
     // Compute m_coord, n_coord, and l_coord with their post-tiled shapes
     auto m_coord = idx2crd(int(blockIdx.x), shape<2>(gA_mkl));
-
-    auto n_coord = idx2crd(int(blockIdx.y), shape<2>(gB_nkl), compact_col_major(shape<2>(gB_nkl)));
-
+    auto n_coord = idx2crd(int(blockIdx.y), shape<2>(gB_nkl));
     // handles the difference between the rank of Tensor returned by load_input in case they do not have a batch mode
     auto l_coord = [&] (auto const& gB_nkl_) {
       // gB_nkl needs to be passed into the lambda because C++17

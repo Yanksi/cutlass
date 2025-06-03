@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -160,7 +160,7 @@ void PerformanceReport::append_result(PerformanceResult result) {
   }
 }
 
-void PerformanceReport::sort_results(PerformanceResultVector &results) {
+void PerformanceReport::sort_flops_per_byte(PerformanceResultVector &results) {
 
   struct FlopsPerByteCompare
   {
@@ -174,6 +174,19 @@ void PerformanceReport::sort_results(PerformanceResultVector &results) {
   };
 
   std::stable_sort(results.begin(), results.end(), FlopsPerByteCompare());
+}
+
+void PerformanceReport::sort_flops_per_sec(PerformanceResultVector &results) {
+
+  struct FlopsPerSecondCompare
+  {
+    bool operator()(const PerformanceResult &a, const PerformanceResult &b)
+    {
+      return a.gflops_per_sec() > b.gflops_per_sec();
+    }
+  };
+
+  std::stable_sort(results.begin(), results.end(), FlopsPerSecondCompare());
 }
 
 void PerformanceReport::append_results(PerformanceResultVector const &results) {
@@ -195,8 +208,12 @@ PerformanceReport::~PerformanceReport() {
   //
   if (options_.report.verbose && !concatenated_results_.empty()) {
 
-    if (options_.report.sort_results) {
-      sort_results(concatenated_results_);
+    if (options_.report.sort_flops_per_byte) {
+      sort_flops_per_byte(concatenated_results_);
+    }
+
+    if (options_.report.sort_flops_per_sec) {
+      sort_flops_per_sec(concatenated_results_);
     }
 
     std::cout << "\n\n";
@@ -337,7 +354,15 @@ std::ostream & PerformanceReport::print_csv_header_(
     << ",Bytes"
     << ",Flops"
     << ",Flops/Byte"
-    << ",Runtime"
+    << ",Runtime";
+
+  if (options_.device.devices.size() > 1) {
+    for (size_t i = 0; i < options_.device.devices.size(); i++) {
+      out << ",Runtime_" << i;
+    }
+  }
+
+  out
     << ",GB/s"
     << ",GFLOPs"
     ;
@@ -375,6 +400,16 @@ std::ostream & PerformanceReport::print_result_csv_(
     << "," << result.flops
     << "," << result.flops / result.bytes
     << "," << result.runtime;
+
+  if (options_.device.devices.size() > 1) {
+    if (result.runtime_vector.size() != options_.device.devices.size()) {
+      throw std::runtime_error("Runtime vector size mismatch");
+    }
+
+    for (const auto runtime : result.runtime_vector) {
+      out << "," << runtime;
+    }
+  }
 
   if (result.good()) {
 

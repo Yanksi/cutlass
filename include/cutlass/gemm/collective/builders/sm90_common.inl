@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -182,7 +182,7 @@ rs_smem_selector() {
   static_assert(BLK_MN0 % 8 == 0, "BLK_MN0 must be a multiple of 8.");
   static_assert(BLK_K0 % 8 == 0,  "BLK_K0 must be a multiple of 8.");
   if constexpr (major == GMMA::Major::MN) {
-    if constexpr (sizeof(ElementType) == 4){
+    if constexpr (sizeof(ElementType) % 4 == 0) { // Whole-word types
       if constexpr (is_ws_transposed_B) {
         // only optimized transpositionB(SW32 and SW128 for tf32) can be used, but prefer SW32 due to free bank conflict
         if constexpr (BLK_MN0 % size<0>(GMMA::Layout_MN_SW32_Atom<ElementType>{}) == 0) {
@@ -389,20 +389,44 @@ is_input_fp8() {
 
 // We need to handle the tuples in this function since it is used in SFINAE dispatch in the CollectiveBuilder.
 // At that point, it is not guaranteed that the tuples have been split out into the required parts.
-template <class MaybeTupleElementA, class LayoutA, class MaybeTupleElementB, class LayoutB>
+template <class MaybeTupleElementA, class MaybePairLayoutA, class MaybeTupleElementB, class MaybePairLayoutB>
 constexpr bool
 is_use_rmem_A() {
 
-  using ElementA = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementA>;
-  using ElementB = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementB>;
+  // Handle the case we get a pair of layouts. We expect one of them to be an actual cute layout
+  if constexpr (cute::is_tuple_v<MaybePairLayoutA> and
+                cute::is_tuple_v<MaybePairLayoutB>) {
+    if constexpr ((cute::is_layout<cute::remove_pointer_t<cute::tuple_element_t<0, MaybePairLayoutA>>>::value or
+                   cute::is_layout<cute::remove_pointer_t<cute::tuple_element_t<1, MaybePairLayoutA>>>::value) and 
+                  (cute::is_layout<cute::remove_pointer_t<cute::tuple_element_t<0, MaybePairLayoutB>>>::value or
+                   cute::is_layout<cute::remove_pointer_t<cute::tuple_element_t<1, MaybePairLayoutB>>>::value)) {
+      return is_use_rmem_A<MaybeTupleElementA, cute::tuple_element_t<0, MaybePairLayoutA>,
+                           MaybeTupleElementB, cute::tuple_element_t<0, MaybePairLayoutB>>();
+    } else {
+      using ElementA = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementA>;
+      using ElementB = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementB>;
 
-  constexpr bool IsABDifferentWidth = cute::sizeof_bits_v<ElementA> != cute::sizeof_bits_v<ElementB>;
-  constexpr bool HasScales = cute::is_tuple<MaybeTupleElementA>::value ^ cute::is_tuple<MaybeTupleElementB>::value;
-  constexpr bool IsInputSizeTwoBytes = is_input_size_two_bytes<ElementA, ElementB>();
-  constexpr bool IsLayoutAkBk = cutlass::gemm::detail::is_k_major_A<LayoutA>() &&
-                                cutlass::gemm::detail::is_k_major_B<LayoutB>();
-  constexpr bool IsUseRmemA = (!IsInputSizeTwoBytes && !IsLayoutAkBk) || IsABDifferentWidth || HasScales;
-  return IsUseRmemA;
+      constexpr bool IsABDifferentWidth = cute::sizeof_bits_v<ElementA> != cute::sizeof_bits_v<ElementB>;
+      constexpr bool HasScales = cute::is_tuple<MaybeTupleElementA>::value ^ cute::is_tuple<MaybeTupleElementB>::value;
+      constexpr bool IsInputSizeTwoBytes = is_input_size_two_bytes<ElementA, ElementB>();
+      constexpr bool IsLayoutAkBk = cutlass::gemm::detail::is_k_major_A<MaybePairLayoutA>() &&
+                                  cutlass::gemm::detail::is_k_major_B<MaybePairLayoutB>();
+      constexpr bool IsUseRmemA = (!IsInputSizeTwoBytes && !IsLayoutAkBk) || IsABDifferentWidth || HasScales;
+      return IsUseRmemA;
+    }
+  } 
+  else {
+    using ElementA = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementA>;
+    using ElementB = detail::deduce_mixed_width_dtype_t<0, MaybeTupleElementB>;
+
+    constexpr bool IsABDifferentWidth = cute::sizeof_bits_v<ElementA> != cute::sizeof_bits_v<ElementB>;
+    constexpr bool HasScales = cute::is_tuple<MaybeTupleElementA>::value ^ cute::is_tuple<MaybeTupleElementB>::value;
+    constexpr bool IsInputSizeTwoBytes = is_input_size_two_bytes<ElementA, ElementB>();
+    constexpr bool IsLayoutAkBk = cutlass::gemm::detail::is_k_major_A<MaybePairLayoutA>() &&
+                                  cutlass::gemm::detail::is_k_major_B<MaybePairLayoutB>();
+    constexpr bool IsUseRmemA = (!IsInputSizeTwoBytes && !IsLayoutAkBk) || IsABDifferentWidth || HasScales;
+    return IsUseRmemA;
+  }
 }
 
 template <class ElementA, int AlignmentA, class ElementB, int AlignmentB, int RequiredAlignment>

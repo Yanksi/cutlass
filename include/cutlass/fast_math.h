@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,9 @@
 #include <cmath>
 #include <type_traits>
 #endif
-
+#if !defined(__QNX__)
+#include <cuda/std/utility>
+#endif
 #include "cutlass/cutlass.h"
 #include "cutlass/array.h"
 #include "cutlass/uint128.h"
@@ -53,13 +55,16 @@
 namespace cutlass {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-
+#if !defined(__QNX__)
+using ::cuda::std::swap;
+#else
 template <typename T>
 CUTLASS_HOST_DEVICE void swap(T &lhs, T &rhs) {
   T tmp = lhs;
   lhs = rhs;
   rhs = tmp;
 }
+#endif
 
 /******************************************************************************
  * Static math utilities
@@ -154,7 +159,7 @@ template <typename value_t>
 CUTLASS_HOST_DEVICE
 CUTLASS_CONSTEXPR_IF_CXX17
 value_t abs_for_integer(value_t a) {
-  return ((a > 0) ? a : -a);
+  return ((a > value_t{0}) ? a : -a);
 }
 /**
  * Greatest common divisor
@@ -164,9 +169,9 @@ CUTLASS_HOST_DEVICE
 CUTLASS_CONSTEXPR_IF_CXX17
 value_t gcd(value_t a, value_t b) {
   for (;;) {
-    if (a == 0) return cutlass::abs_for_integer(b);
+    if (a == value_t{0}) return cutlass::abs_for_integer(b);
     b %= a;
-    if (b == 0) return cutlass::abs_for_integer(a);
+    if (b == value_t{0}) return cutlass::abs_for_integer(a);
     a %= b;
   }
 }
@@ -179,7 +184,7 @@ CUTLASS_HOST_DEVICE
 CUTLASS_CONSTEXPR_IF_CXX17
 value_t lcm(value_t a, value_t b) {
   value_t temp = cutlass::gcd(a, b);
-  return (temp != 0) ? value_t(cutlass::abs_for_integer(a) / temp * cutlass::abs_for_integer(b)) : value_t{};
+  return (temp != value_t{0}) ? value_t(cutlass::abs_for_integer(a) / temp * cutlass::abs_for_integer(b)) : value_t{};
 }
 
 /**
@@ -189,7 +194,7 @@ template <typename value_t>
 CUTLASS_HOST_DEVICE
 CUTLASS_CONSTEXPR_IF_CXX17
 value_t gcd_cxx11(value_t a, value_t b) {
-  return (a == 0 || b == 0) ? cutlass::abs_for_integer(a | b) : cutlass::gcd_cxx11(b, a % b);
+  return (a == value_t{0} || b == value_t{0}) ? cutlass::abs_for_integer(a | b) : cutlass::gcd_cxx11(b, a % b);
 }
 
 /**
@@ -392,6 +397,20 @@ struct FastDivmod {
   CUTLASS_HOST_DEVICE
   int divide(int dividend) const {
     return div(dividend);
+  }
+
+  /// Computes integer division remainder using precomputed values.
+  CUTLASS_HOST_DEVICE
+  int rem(int dividend) const {
+    int quotient, remainder;
+    fast_divmod(quotient, remainder, dividend);
+    return remainder;
+  }
+
+  /// Alias for `rem`
+  CUTLASS_HOST_DEVICE
+  int remainder(int dividend) const {
+    return rem(dividend);
   }
 
   /// Computes integer division and modulus using precomputed values. This is computationally

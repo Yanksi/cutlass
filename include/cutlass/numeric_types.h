@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,10 +34,17 @@
 */
 #pragma once
 
-#include "cutlass/cutlass.h"
-#include "cutlass/platform/platform.h"
-#include "cutlass/numeric_size.h"
+#include "cute/util/type_traits.hpp"
 
+#include "cutlass/numeric_size.h"
+#include "cutlass/integer_subbyte.h"
+#include "cutlass/half.h"
+#include "cutlass/bfloat16.h"
+#include "cutlass/tfloat32.h"
+#include "cutlass/float8.h"
+#include "cutlass/uint128.h"
+#include "cutlass/exmy_base.h"
+#include "cutlass/float_subbyte.h"
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -58,6 +65,30 @@ struct index_sequence_helper<0, 0, Next...> {
 template <size_t N>
 using make_index_sequence = typename index_sequence_helper<N>::type;
 
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Default case - no negative zero
+template <typename T>
+struct has_negative_zero : CUTE_STL_NAMESPACE::false_type{};
+
+// Float types that support negative zero
+template <> struct has_negative_zero<mx_float4_t<float_e2m1_t>> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<mx_float6_t<float_e2m3_t>> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<mx_float8_t<float_e4m3_t>> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<mx_float8_t<float_e5m2_t>> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<float_e2m1_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<float_e2m3_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<float_e4m3_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<float_e5m2_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<half_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<bfloat16_t> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<float> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<double> : CUTE_STL_NAMESPACE::true_type{};
+template <> struct has_negative_zero<tfloat32_t> : CUTE_STL_NAMESPACE::true_type{};
+
+// Helper variable template 
+template <typename T>
+inline constexpr bool has_negative_zero_v = has_negative_zero<T>::value;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -78,11 +109,5 @@ struct get_unpacked_element_type {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "cutlass/integer_subbyte.h"
-#include "cutlass/half.h"
-#include "cutlass/bfloat16.h"
-#include "cutlass/tfloat32.h"
-#include "cutlass/float8.h"
-#include "cutlass/uint128.h"
-/////////////////////////////////////////////////////////////////////////////////////////////////
+
 

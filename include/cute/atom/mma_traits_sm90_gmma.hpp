@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -239,11 +239,10 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
                          "Not a canonical GMMA_MN Layout: Expected K-size 256/sizeof_bits<T> for dense or (128|512)/sizeof_bits<T> for sparse.");
 
     // Construct the canonical GMMA T Layout with shape ((W,n),(8,2))
-    Layout canonical_layout = logical_divide(layout(u128_tensor), make_tile(Layout<Int<W>,_1>{}, Layout<Int<8>,_1>{}));
+    Layout canonical_layout = logical_divide(layout(u128_tensor), Tile<Layout<Int<W>,_1>,Layout<Int<8>,_1>>{});
 
-    // Check ranks of canonical
-    CUTE_STATIC_ASSERT_V(rank<0>(canonical_layout) == Int<2>{}, "Not a canonical GMMA_MN Layout: No flat offset mode");
-    CUTE_STATIC_ASSERT_V(rank<1>(canonical_layout) == Int<2>{}, "Not a canonical GMMA_MN Layout: No flat offset mode");
+    // Check profile of canonical
+    CUTE_STATIC_ASSERT_V(congruent(canonical_layout, Shape<Shape<_1,_1>,Shape<_1,_1>>{}), "Not a canonical GMMA_MN Layout: Expected profile failure.");
     // Check canonical mode strides
     constexpr uint32_t stride_00 = stride<0,0>(canonical_layout);
     constexpr uint32_t expected_stride_00 = LAYOUT_TYPE == LayoutType::INTERLEAVE ? stride<0,0>(canonical_layout) : 1;
@@ -274,11 +273,10 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
                          "Not a canonical GMMA_K Layout: Expected K-size 2 for dense or 4 for sparse (in units of uint128_t).");
 
     // Construct the canonical GMMA N Layout with shape ((8,n),(2,1))
-    Layout canonical_layout = logical_divide(layout(u128_tensor), make_tile(Layout<_8,_1>{}, Layout<_2,_1>{}));
+    Layout canonical_layout = logical_divide(layout(u128_tensor), Tile<Layout<_8,_1>,Layout<_2,_1>>{});
 
-    // Check ranks of canonical
-    CUTE_STATIC_ASSERT_V(rank<0>(canonical_layout) == Int<2>{}, "Not a canonical GMMA_K Layout: No flat offset mode");
-    CUTE_STATIC_ASSERT_V(rank<1>(canonical_layout) == Int<2>{}, "Not a canonical GMMA_K Layout: No flat offset mode");
+    // Check profile of canonical
+    CUTE_STATIC_ASSERT_V(congruent(canonical_layout, Shape<Shape<_1,_1>,Shape<_1,_1>>{}), "Not a canonical GMMA_K Layout: Expected profile failure.");
     // Check canonical mode strides
     constexpr uint32_t stride_00 = stride<0,0>(canonical_layout);
     constexpr uint32_t expected_stride_00 = W;
@@ -295,19 +293,6 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
   } else {
     static_assert(MajorMode != Major::MN && MajorMode != Major::K, "Unrecognized MajorMode!");
   }
-
-#if 0
-  // DEBUG and SANITY
-  assert((start_address & 0b0000001111) == 0); // Must be 16B aligned (4LSB are 0) no negotiation
-  assert((start_address & 0b1110000000) == 0); // Assert base_offset is 0, generalize later
-  if (thread0()) {
-    print("smem_desc input     tensor: "); print(tensor.data()); print(" o "); print(tensor.layout()); print("\n");
-    print("smem_desc uint128_t tensor: "); print(u128_tensor.data()); print(" o "); print(u128_tensor.layout()); print("\n");
-    //print("     desc canonical layout: "); print(canonical_layout); print("\n");
-    print(desc);
-  }
-#endif
-
   return desc;
 }
 
@@ -337,7 +322,11 @@ struct DescriptorIterator
   CUTE_HOST_DEVICE constexpr
   DescriptorIterator operator+(Index const& offset) const
   {
-    return { GmmaDescriptor{desc_ + uint64_t(offset)} };
+    // Use 32bit calculation rather than 64 bit calculation as we only update the part of desc
+    GmmaDescriptor ret;
+    ret.reg32_[0] = desc_.reg32_[0] + uint32_t(offset);
+    ret.reg32_[1] = desc_.reg32_[1];
+    return { ret };
   }
 };
 
@@ -1127,7 +1116,6 @@ struct MMA_Traits<SM90_64x32x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 template <
   GMMA::Major tnspA,

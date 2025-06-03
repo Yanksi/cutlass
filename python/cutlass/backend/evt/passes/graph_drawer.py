@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,11 +29,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 #################################################################################################
+from __future__ import annotations
 
 import subprocess
 
 from cutlass_library import DataTypeTag
-import pydot
 
 from cutlass.backend.evt.ir.dag_ir import DAGIR
 
@@ -113,6 +113,7 @@ class EVTGraphDrawer:
         graph: DAGIR,
         name: str
     ):
+        import pydot
         dot_graph = pydot.Dot(name, randir="TB")
         for node in graph.nodes_meta:
             style = self._get_node_style(node)

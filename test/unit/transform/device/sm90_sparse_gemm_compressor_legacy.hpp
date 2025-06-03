@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,6 +45,7 @@
 #include "cute/tensor.hpp"                 // cute::Tensor, cute::make_tensor, cute::print_tensor
 #include "cutlass/arch/arch.h"             // cutlass::arch::Sm90
 #include "cutlass/cutlass.h"               // cutlass::Status
+#include "cutlass/detail/collective.hpp"
 #include "cutlass/detail/layout.hpp"       // cutlass::TagToStrideA_t
 #include "cutlass/fast_math.h"             // cutlass::ceil_div, cutlass::round_up
 #include "cutlass/kernel_hardware_info.h"  // cutlass::KernelHardwareInfo
@@ -154,7 +155,9 @@ namespace detail {
           int offset = chunk_idx * LogicalElemsAPerChunk + subchunk_idx * ElemsARawPerElementAMmaRaw + elem_idx;
           subchunk_elems[elem_idx] = offset < effective_elems ? tensorA(offset) : ElementA(0);
           
-          if (subchunk_elems[elem_idx] != ElementA(0)) {
+          ElementA zero = static_cast<ElementA>(0);
+          ElementA minus_zero = static_cast<ElementA>(ElementA(1) << cutlass::sizeof_bits_v<ElementA> - 1);
+          if (subchunk_elems[elem_idx] != zero && subchunk_elems[elem_idx] != minus_zero) {
             if (non_zero_cnt >= PhysicalSubChunk) {
               #ifdef  __CUDA_ARCH__
                 asm volatile ("brkpt;\n" ::);
@@ -219,9 +222,7 @@ public:
   // * EltA
   using ElementA = ElementA_;
   using ElementAUint = cute::uint_bit_t<cute::sizeof_bits_v<ElementA>>;
-  static constexpr bool IsRuntimeDataTypeA = cute::is_same_v<ElementA, cutlass::type_erased_dynamic_float8_t> ||
-                                             cute::is_same_v<ElementA, cutlass::type_erased_dynamic_float6_t> ||
-                                             cute::is_same_v<ElementA, cutlass::type_erased_dynamic_float4_t>;
+  static constexpr bool IsRuntimeDataTypeA = cutlass::gemm::collective::detail::is_sm10x_runtime_f8f6f4<ElementA>();
   using ArrayElementA = cute::conditional_t<IsRuntimeDataTypeA,
                                             cute::uint_bit_t<cute::sizeof_bits_v<ElementA>>,
                                             ElementA>;

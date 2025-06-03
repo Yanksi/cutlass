@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -63,7 +63,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
-#include <float.h>
+#include <cfloat>
 
 #include "cutlass/cutlass.h"
 
@@ -124,7 +124,7 @@ struct CooperativeConfig {
   using KernelSchedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8FastAccum;
   using EpilogueSchedule = cutlass::epilogue::PtrArrayTmaWarpSpecializedCooperative;
   using TileShape           = Shape<_256,_128,_128>;
-  using ClusterShape        = Shape<_2,_2,_1>;
+  using ClusterShape        = Shape<_1,_2,_1>;
 };
 
 struct PingpongConfig {
@@ -296,14 +296,14 @@ struct Options {
       int m = cmd_line_m;
       int n = cmd_line_n;
       int k = cmd_line_k;
-      if (m < 1) {
-        m = alignment * ((rand() % 64) + 1);
+      if (m < 0) {
+        m = alignment * ((rand() % 64));
       }
-      if (n < 1) {
-        n = alignment * ((rand() % 64) + 1);
+      if (n < 0) {
+        n = alignment * ((rand() % 64));
       }
-      if (k < 1) {
-        k = alignment * ((rand() % 64) + 1);
+      if (k < 0) {
+        k = alignment * ((rand() % 64));
       }
       problem_sizes_host.push_back({m, n, k});
     }
@@ -333,19 +333,9 @@ struct Options {
       cutlass::CommandLine::tokenize(tokens, extent_str, 'x');
 
       for (int i = 0; i < int(tokens.size()); ++i) {
-        int x = std::atoi(tokens.at(i).c_str());
-
-        // round up
-        if (x % alignment) {
-          x += (alignment - (x % alignment));
-        }
-
-        extent.at(i) = x;
+        extent.at(i) = std::atoi(tokens.at(i).c_str());
       }
-
-      if (extent.product()) {
-        problem_sizes_host.push_back({extent.m(), extent.n(), extent.k()});
-      }
+      problem_sizes_host.push_back({extent.m(), extent.n(), extent.k()});
     }
     groups = static_cast<int>(problem_sizes_host.size());
 
@@ -500,10 +490,27 @@ void initialize(const Options &options) {
   std::vector<ElementAccumulator *> ptr_beta_host(options.groups);
 
   for (int32_t i = 0; i < options.groups; ++i) {
-    ptr_A_host.at(i) = block_A.get() + offset_A.at(i);
-    ptr_B_host.at(i) = block_B.get() + offset_B.at(i);
-    ptr_C_host.at(i) = block_C.get() + offset_C.at(i);
-    ptr_D_host.at(i) = block_D.get() + offset_D.at(i);
+    // If the current group's matrix has size 0, set the pointer to nullptr
+    if (i < options.groups - 1 && offset_A.at(i) == offset_A.at(i + 1)) {
+      ptr_A_host.at(i) = nullptr;
+    } else {
+      ptr_A_host.at(i) = block_A.get() + offset_A.at(i);
+    }
+    if (i < options.groups - 1 && offset_B.at(i) == offset_B.at(i + 1)) {
+      ptr_B_host.at(i) = nullptr;
+    } else {
+      ptr_B_host.at(i) = block_B.get() + offset_B.at(i);
+    }
+    if (i < options.groups - 1 && offset_C.at(i) == offset_C.at(i + 1)) {
+      ptr_C_host.at(i) = nullptr;
+    } else {
+      ptr_C_host.at(i) = block_C.get() + offset_C.at(i);
+    }
+    if (i < options.groups - 1 && offset_D.at(i) == offset_D.at(i + 1)) {
+      ptr_D_host.at(i) = nullptr;
+    } else {
+      ptr_D_host.at(i) = block_D.get() + offset_D.at(i);
+    }
     alpha_host.push_back((options.alpha == FLT_MAX) ? static_cast<ElementAccumulator>((rand() % 5) + 1) : options.alpha);
     beta_host.push_back((options.beta == FLT_MAX) ? static_cast<ElementAccumulator>(rand() % 5) : options.beta);
     ptr_alpha_host.at(i) = block_alpha.get() + i;
@@ -539,9 +546,10 @@ void initialize(const Options &options) {
   beta_device.reset(options.groups);
   beta_device.copy_from_host(ptr_beta_host.data());
 
-  initialize_block(block_A, seed + 2023);
+  initialize_block(block_A, seed + 2021);
   initialize_block(block_B, seed + 2022);
-  initialize_block(block_C, seed + 2021);
+  initialize_block(block_C, seed + 2023);
+  initialize_block(block_D, seed + 2024);
   block_alpha.copy_from_host(alpha_host.data());
   block_beta.copy_from_host(beta_host.data());
 }
@@ -550,11 +558,10 @@ void initialize(const Options &options) {
 template <typename GemmT>
 typename GemmT::Arguments args_from_options(const Options &options, bool host_problem_shapes_available = true)
 {
-  cutlass::KernelHardwareInfo hw_info;
   // Change device_id to another value if you are running on a machine with multiple GPUs and wish
   // to use a GPU other than that with device ID 0.
-  hw_info.device_id = 0;
-  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
+  int device_id = 0;
+  cutlass::KernelHardwareInfo kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Gemm::GemmKernel>(device_id);
 
   typename GemmT::Arguments arguments;
   decltype(arguments.epilogue.thread) fusion_args;
@@ -590,7 +597,7 @@ typename GemmT::Arguments args_from_options(const Options &options, bool host_pr
       {options.groups, problem_sizes.get(), options.problem_sizes_host.data()},
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
       {fusion_args, ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
-      hw_info
+      kernel_hw_info
     };
   }
   else {
@@ -599,7 +606,7 @@ typename GemmT::Arguments args_from_options(const Options &options, bool host_pr
       {options.groups, problem_sizes.get(), nullptr},
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
       {fusion_args, ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
-      hw_info
+      kernel_hw_info
     };
   }
 
@@ -654,6 +661,13 @@ int run(Options &options, bool host_problem_shapes_available = true)
   allocate(options);
   initialize(options);
 
+  std::cout << "  Problem Sizes, Alpha, Beta " << std::endl;
+  for (int32_t i = 0; i < options.groups; ++i) {
+    std::cout << "    " << options.problem_sizes_host.at(i);
+    std::cout << ", "   << alpha_host.at(i) << ", " << beta_host.at(i) << std::endl;
+  }
+  std::cout << "  Groups      : " << options.groups  << std::endl;
+
   // Instantiate CUTLASS kernel depending on templates
   GemmT gemm;
 
@@ -701,14 +715,8 @@ int run(Options &options, bool host_problem_shapes_available = true)
     result.avg_runtime_ms  = double(elapsed_ms) / double(options.iterations);
     result.gflops          = options.gflops(result.avg_runtime_ms / 1000.0, options.problem_sizes_host);
 
-    std::cout << "  Problem Sizes, Alpha, Beta " << std::endl;
-    for (int32_t i = 0; i < options.groups; ++i) {
-      std::cout << "    " << options.problem_sizes_host.at(i);
-      std::cout << ", " << alpha_host.at(i) << ", " << beta_host.at(i) << std::endl;
-    }
-    std::cout << "  Groups      : " << options.groups  << std::endl;
     std::cout << "  Avg runtime : " << result.avg_runtime_ms << " ms" << std::endl;
-    std::cout << "  GFLOPS      : " << result.gflops << std::endl;
+    std::cout << "  TFLOPS      : " << result.gflops / 1000.0 << std::endl;
   }
 
   return 0;
@@ -732,12 +740,15 @@ int main(int argc, char const **args) {
   CUDA_CHECK(cudaGetDevice(&current_device_id));
   CUDA_CHECK(cudaGetDeviceProperties(&props, current_device_id));
   cudaError_t error = cudaGetDeviceProperties(&props, 0);
-  if (props.major < 9) {
+  if (props.major != 9 || props.minor != 0) {
     std::cerr
-      << "This example requires a GPU of NVIDIA's Hopper Architecture or "
-      << "later (compute capability 90 or greater).\n";
+      << "This example requires a GPU of NVIDIA's Hopper Architecture (compute capability 90).\n";
     return 0;
   }
+
+  
+  
+
   //
   // Parse options
   //

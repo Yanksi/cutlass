@@ -1,5 +1,5 @@
 
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -27,29 +27,31 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+add_subdirectory(hopper)
+add_subdirectory(blackwell)
 
 cutlass_example_add_executable(
-  sgemm_1
+  cute_tutorial_sgemm_1
   sgemm_1.cu
 )
 
 cutlass_example_add_executable(
-  sgemm_2
+  cute_tutorial_sgemm_2
   sgemm_2.cu
 )
 
 cutlass_example_add_executable(
-  sgemm_sm70
+  cute_tutorial_sgemm_sm70
   sgemm_sm70.cu
 )
 
 cutlass_example_add_executable(
-  sgemm_sm80
+  cute_tutorial_sgemm_sm80
   sgemm_sm80.cu
 )
 
 cutlass_example_add_executable(
-  tiled_copy
+  cute_tutorial_tiled_copy
   tiled_copy.cu
 )
 

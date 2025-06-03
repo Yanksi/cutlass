@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -117,12 +117,7 @@ def shape_div(a, b):
       return shape_div(a, product(b))
     else:                              # "int" "int"
       assert a % b == 0 or b % a == 0
-      #return -(-a // b)      # Python exclusive impl: "//" is always floor div
-      if a % b == 0:
-        return a // b
-      else:
-        return signum(a*b)
-
+      return (a + b - 1) // b
 
 # Exclusive prefix product with output congruent to input a
 def prefix_product(a, init=1):

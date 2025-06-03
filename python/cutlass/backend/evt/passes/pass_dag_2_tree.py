@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -108,7 +108,7 @@ class PassDAG2Tree(EVTPassBase):
 
                 # Create the subgraph
                 subgraph_ = self.dag_ir._graph.subgraph(new_subgraph_nodes)
-                subgraph = DAGIR()
+                subgraph = DAGIR(self.dag_ir.cc)
                 for node in subgraph_.nodes:
                     meta = deepcopy(self.dag_ir.get_node_meta(node))
                     if node not in node_to_fuse:

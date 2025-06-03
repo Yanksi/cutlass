@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -49,7 +49,7 @@ class DAGIR:
 
     In the DAGIR, ``node`` is an string of its name. ``node_meta`` is the underlying class of the node
     """
-    def __init__(self, element_compute=DataType.f32, cc: int=None) -> None:
+    def __init__(self, cc, element_compute=DataType.f32) -> None:
         # The EVT DAGIR is managed through the nextworkX Digraph class
         self._graph = nx.DiGraph()
 
@@ -57,7 +57,7 @@ class DAGIR:
 
         self.reduction_names = []
 
-        self.cc = cc if cc else device_cc()
+        self.cc = cc
 
     #
     # IR manipulator

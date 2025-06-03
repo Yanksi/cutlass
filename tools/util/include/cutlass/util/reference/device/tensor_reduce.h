@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -232,6 +232,8 @@ ComputeType TensorTransformReduce(
     workspace, identity, workspace_size, reduce
   );
 
+  cudaStreamSynchronize(stream);
+
   if (copy_out) {
     cudaError_t result = cudaMemcpy(&identity, workspace, sizeof(identity), cudaMemcpyDeviceToHost);
     if (result != cudaSuccess) {
@@ -284,6 +286,8 @@ ComputeType TensorTransformReduce(
   ><<< dim3(1, 1), dim3(kFinalizeBlockSize, 1), 0, stream >>>(
     workspace, identity, workspace_size, reduce
   );
+
+  cudaStreamSynchronize(stream);
 
   if (copy_out) {
     cudaError_t result = cudaMemcpy(&identity, workspace, sizeof(identity), cudaMemcpyDeviceToHost);

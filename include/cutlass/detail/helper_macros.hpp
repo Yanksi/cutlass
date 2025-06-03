@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,12 @@
 #define CUTLASS_DEVICE inline
 #endif
 
+#if ! defined(_MSC_VER)
+#define CUTLASS_LAMBDA_FUNC_INLINE __attribute__((always_inline))
+#else
+#define CUTLASS_LAMBDA_FUNC_INLINE [[msvc::forceinline]]
+#endif
+
 #define CUTLASS_HOST __host__
 #define CUTLASS_GLOBAL __global__ static
 
@@ -74,11 +80,11 @@ CUTLASS_HOST_DEVICE void __CUTLASS_UNUSED(T const &)
 
 #ifdef _MSC_VER
 // Provides support for alternative operators 'and', 'or', and 'not'
-#include <iso646.h>
+#include <ciso646>
 #endif // _MSC_VER
 
 #if !defined(__CUDACC_RTC__)
-#include <assert.h>
+#include <cassert>
 #endif
 
 #if defined(__CUDA_ARCH__)
@@ -190,12 +196,43 @@ namespace cutlass {
 #  define CUTLASS_CPLUSPLUS __cplusplus
 #endif
 
-#if (201700L <= CUTLASS_CPLUSPLUS)
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/n4762.pdf
+// Section 14.8 Predefined macro names
+#if (201703L <= CUTLASS_CPLUSPLUS)
 #define CUTLASS_CONSTEXPR_IF_CXX17 constexpr
 #define CUTLASS_CXX17_OR_LATER 1
 #else
 #define CUTLASS_CONSTEXPR_IF_CXX17
 #define CUTLASS_CXX17_OR_LATER 0
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// __CUDA_ARCH_SPECIFIC__ is introduced in CUDA 12.9
+#if !defined(CUDA_ARCH_CONDITIONAL)
+
+#if defined(__CUDA_ARCH_SPECIFIC__)
+#define CUDA_ARCH_CONDITIONAL(ARCH_XXYY) (__CUDA_ARCH_SPECIFIC__ == ARCH_XXYY)
+#else
+#define CUDA_ARCH_CONDITIONAL(ARCH_XXYY) (false)
+#endif
+
+#endif
+
+// __CUDA_ARCH_FAMILY_SPECIFIC__ is introduced in CUDA 12.9
+#if !defined(CUDA_ARCH_FAMILY)
+
+#if defined(__CUDA_ARCH_FAMILY_SPECIFIC__)
+#define CUDA_ARCH_FAMILY(ARCH_XXYY) (__CUDA_ARCH_FAMILY_SPECIFIC__ == ARCH_XXYY)
+#else
+#define CUDA_ARCH_FAMILY(ARCH_XXYY) (false)
+#endif
+
+#endif
+
+#if !defined(CUDA_ARCH_CONDITIONAL_OR_FAMILY)
+#define CUDA_ARCH_CONDITIONAL_OR_FAMILY(ARCH_XXYY) \
+  (CUDA_ARCH_CONDITIONAL(ARCH_XXYY) || CUDA_ARCH_FAMILY(ARCH_XXYY))
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

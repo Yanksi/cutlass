@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,6 +40,9 @@
 
 namespace cutlass {
 namespace arch {
+
+constexpr int sm100_smem_capacity_bytes = 232448;  
+constexpr int sm120_smem_capacity_bytes = 101376;
 
 #if defined(__NVCC__) || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 
@@ -91,6 +94,19 @@ struct Sm89 {
 };
 struct Sm90 {
   static int const kMinComputeCapability = 90; 
+};
+
+
+struct Sm100 {
+  static int const kMinComputeCapability = 100; 
+};
+
+struct Sm101 {
+  static int const kMinComputeCapability = 101; 
+};
+
+struct Sm120 {
+  static int const kMinComputeCapability = 120;
 };
 
 /// Triggers a breakpoint on the device

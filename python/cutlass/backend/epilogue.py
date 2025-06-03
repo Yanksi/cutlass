@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -34,7 +34,6 @@ import ctypes
 
 from cutlass_library import SubstituteTemplate
 import numpy as np
-from scipy.special import erf
 
 from cutlass_library import DataType, DataTypeTag
 from cutlass.backend.c_types import MatrixCoord_, tuple_factory
@@ -44,6 +43,7 @@ from cutlass.utils.datatypes import is_numpy_tensor, is_torch_available, is_torc
 
 dtype2ctype = {
     DataType.f16: ctypes.c_uint16,
+    DataType.bf16: ctypes.c_uint16,
     DataType.f32: ctypes.c_float,
     DataType.f64: ctypes.c_double,
     DataType.s8: ctypes.c_int8,
@@ -529,6 +529,7 @@ class hardswish(ActivationFunctor, metaclass=hardswishMeta):
 class geluMeta(ActivationMeta):
     @classmethod
     def numpy(cls, x):
+        from scipy.special import erf
         return 0.5 * x * (1 + erf(x / np.sqrt(2.0)))
 
     @classmethod

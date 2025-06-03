@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2024 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -362,11 +362,11 @@ public:
           using ClusterSyncWithPrefetchBarrier = typename cutlass::arch::NamedBarrier;
           auto prefetcher_arrive_barrier = ClusterSyncWithPrefetchBarrier(
               blockDim.x * blockDim.y * blockDim.z,
-              /*reserved_named_barriers_*/ 14);
+              /*id*/ 0);
           // Prefetcher warp doesn't arrive on this barrier.
           auto cluster_arrive_barrier = ClusterSyncWithPrefetchBarrier(
               blockDim.x * blockDim.y * blockDim.z - NumThreadsPerWarp,
-              /*reserved_named_barriers_*/ 15);
+              /*id*/ 1);
 
           if (warp_group_role == WarpGroupRole::Producer && producer_warp_role == ProducerWarpRole::PrefetchMK) {
             __syncwarp();
