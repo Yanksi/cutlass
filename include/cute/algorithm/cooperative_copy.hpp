@@ -1,5 +1,5 @@
 /***************************************************************************************************
-* Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+* Copyright (c) 2017 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 * SPDX-License-Identifier: BSD-3-Clause
 *
 * Redistribution and use in source and binary forms, with or without
@@ -36,7 +36,6 @@
 #include <cute/swizzle.hpp>         // cute::Swizzle
 #include <cute/swizzle_layout.hpp>  // cute::get_nonswizzle_portion
 #include <cute/tensor_impl.hpp>     // cute::Tensor
-#include <cute/tensor_predicate.hpp>
 #include <cute/algorithm/copy.hpp>
 #include <cute/atom/copy_atom.hpp>
 

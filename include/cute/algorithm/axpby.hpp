@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,6 @@
 #include <cute/config.hpp>
 
 #include <cute/tensor_impl.hpp>
-#include <cute/tensor_predicate.hpp>
 
 namespace cute
 {
@@ -45,7 +44,7 @@ template <class Alpha,
           class XEngine, class XLayout,
           class Beta,
           class YEngine, class YLayout,
-          class PrdTensor = TrivialPredTensor>
+          class PrdTensor = constant_fn<true_type>>
 CUTE_HOST_DEVICE
 void
 axpby(Alpha                    const& alpha,
@@ -64,7 +63,7 @@ template <class Alpha,
           class XEngine, class XLayout,
           class Beta,
           class YEngine, class YLayout,
-          class PrdTensor = TrivialPredTensor>
+          class PrdTensor = constant_fn<true_type>>
 CUTE_HOST_DEVICE
 void
 axpby(Alpha                    const& alpha,
